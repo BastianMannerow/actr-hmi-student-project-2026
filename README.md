@@ -1,222 +1,282 @@
-# ACT-R TurtleBot Multi-Agent Simulation
+# ACT-R Multi-Agent Simulation
 
-PyQt6 desktop application for configuring, running, inspecting, and comparing cognitive multi-agent simulations based on `pyactr`. The application supports a virtual TurtleBot grid world and ROS 2 control of physical TurtleBot/iRobot Create robots through the same runtime and GUI.
+Desktop application for configuring, running, inspecting, and comparing cognitive multi-agent simulations based on [`pyactr`](https://github.com/jakdot/pyactr). The program uses PyQt6 and starts through `main.py`.
 
-## Installation
+> Detailed installation, configuration, agent-development, and usage instructions are available in the [project wiki](../../wiki).
+
+## Installation and Start
 
 ```bash
 python -m pip install -r requirements.txt
 python main.py
 ```
 
-The program opens maximized with standard window controls. The application and taskbar icon are loaded from `assets/actr_icon.ico` on Windows and `assets/actr_icon.png` on other platforms.
+The window opens maximized with the standard minimize, maximize/restore, and close controls. The application icon is loaded from `assets/actr_icon.ico` on Windows and `assets/actr_icon.png` on other platforms.
 
-## Application areas
+For platform-specific setup and troubleshooting, see the [project wiki](../../wiki).
 
-The centered navigation at the bottom switches between:
+## Main Areas
+
+Three buttons centered at the bottom switch between:
 
 - **Simulation**
 - **Agent Analysis**
 - **Multi Simulation Run**
 
-## Environment backends
-
-The backend is selected under **Simulation → Configuration → Environment** and separately for every Multi Simulation scenario.
-
-### Virtual Environment
-
-The simulation uses the integrated collision-aware grid backend. Available levels are:
-
-- **Open Grid** — 16 × 16 matrix defined by the Level Builder
-- **Turtle Exercise 1** — 16 × 16 open exercise grid
-- **Turtle Exercise 2** — 5 × 9 bordered exercise with known, solid, and passable obstacles
-- **Johannes Lab** — 25 × 22 navigation map with obstacles, passable obstacles, known walls, and a target
-
-The selected Level Builder defines the matrix dimensions; width and height cannot be overridden in the GUI.
-
-The environment supports:
-
-- multiple ACT-R agents
-- stable grid positions and collision checks
-- `W`, `A`, `S`, and `D` motor actions from pyactr manual-buffer events
-- line-of-sight based symbolic perception
-- wall, passable-obstacle, known-wall, and target entities
-- bump callbacks into the selected agent adapter
-- an optional human-controlled agent for interactive virtual simulations
-
-The grid renderer distinguishes known walls, solid walls, passable obstacles, targets, ACT-R agents, and human agents with separate colors and symbols. A legend is displayed below the matrix.
-
-Visual frames sent to pyactr contain only supported stimulus fields (`text`, `position`, and optional `vis_delay`). World-specific metadata is stored separately for inspection. Before every cognitive step, the scheduled agent publishes its current line-of-sight frame, so visual-location and visual-buffer operations use the latest grid values. Empty-schedule resets reuse the same validated frame.
-
-### ROS Real-life
-
-ROS mode maps the same ACT-R motor actions to physical robots while retaining the selected level as a shadow map for the GUI, symbolic perception, collision checks, and exported history.
-
-Two control interfaces are available:
-
-1. **iRobot Create actions**
-   - `irobot_create_msgs/action/DriveDistance`
-   - `irobot_create_msgs/action/RotateAngle`
-   - `irobot_create_msgs/msg/HazardDetectionVector`
-   - `nav_msgs/msg/Odometry`
-2. **Generic cmd_vel**
-   - `geometry_msgs/msg/Twist`
-   - odometry through `nav_msgs/msg/Odometry`
-   - optional bumper input from a compatible `BumperEvent` or `std_msgs/Bool` topic
-
-The namespace template defaults to `/tb{index}`. For three runtime agents this resolves to `/tb1`, `/tb2`, and `/tb3`. Topic and action names, movement speeds, cell size, node prefix, and timeout are configurable in the GUI.
-
-ROS packages are supplied by the active ROS 2 installation and are intentionally not installed through `requirements.txt`. Start the application from a sourced ROS 2 environment. The iRobot action interface requires at least:
-
-```text
-rclpy
-nav_msgs
-action_msgs
-irobot_create_msgs
-```
-
-The generic velocity interface additionally requires `geometry_msgs`.
-
-A missing ROS package, action server, or movement timeout is reported in the GUI and recorded in the event timeline. ROS movements run asynchronously; Automatic execution and Production Jump pause until the physical movement has completed or failed.
-
-## Integrated agent models
-
-Agent models and optional adapters are discovered dynamically in `agents/`.
-
-```text
-agents/
-  Example.py
-  ExampleAdapter.py
-  Runner.py
-  RunnerAdapter.py
-  JohannesAgent.py
-  JohannesAgentAdapter.py
-```
-
-### Runner
-
-The Turtle exercise agent uses ACT-R productions to choose and execute vertical movement. Its adapter receives bump feedback and changes the goal state so the agent reverses direction after a collision.
-
-### JohannesAgent
-
-The Johannes navigation agent uses separate locate, pathfinding, movement, evaluation, goal, and retrieval phases. It defines multiple custom goal/imaginal buffers and declarative-memory chunk types. Its adapter:
-
-- reads the active environment
-- identifies the current position and target
-- plans grid paths
-- writes the next movement into ACT-R buffers
-- records encountered obstacles in declarative memory
-- reacts to virtual or ROS bumper feedback
-
 ## Simulation
 
-### Runtime controls
+### Runtime Controls
 
 The upper control bar provides:
 
 - start or restart
 - pause and resume
-- manual **Step** through the button or Space
+- manual Step execution with the button or Space
 - Step/Automatic toggle
-- speed presets: 1/4 Realtime, 1/2 Realtime, Realtime, 2x Realtime, ASAP
-- agent-specific Production Jump with autocomplete
+- speed presets:
+  - 1/4 Realtime
+  - 1/2 Realtime
+  - Realtime
+  - 2x Realtime
+  - ASAP
+- agent-specific production jump
 - complete history export as ZIP
 
-Production choices are populated after a concrete runtime agent is selected. Static source analysis checks whether the target production is reachable. During the jump, a graph marks reached states and fired production edges.
+Production autocomplete is populated only after a concrete runtime agent has been selected. Before the jump starts, the source analysis checks whether a path from the initial state to the production can be derived.
 
-### Human-controlled agent
+During the jump, a separate graph marks reached states and fired production edges.
 
-One additional human-controlled grid agent can be enabled for interactive **virtual** simulations.
+### Human-Controlled Agent
 
-- configurable name
-- movement through WASD or arrow keys
-- independent of ACT-R timing and speed presets
-- recorded in the event history
+Normal interactive simulations can include one additional human-controlled grid agent.
 
-Human agents are disabled in ROS mode and Multi Simulation Run.
+- Enable the agent under **Configuration → Human-Controlled Agent**.
+- Enter an individual name.
+- Move with **WASD** or the **arrow keys**.
+- Movement remains responsive in every speed mode, including ASAP.
+- Keyboard movement is ignored while typing in text fields, combo boxes, spin boxes, or code views.
+- Human movement is recorded in the event history.
 
-### Configuration persistence
+The human entity occupies the same grid as ACT-R agents but does not own an ACT-R model, productions, buffers, or declarative memory.
 
-The latest interactive configuration is stored with `QSettings` and restored at the next start. **Reset to Default Settings** removes the stored configuration.
+### Configuration Persistence
+
+The latest interactive simulation configuration is stored with `QSettings` and restored at the next program start.
+
+**Reset to Default Settings** removes the stored values and restores the defaults.
+
+Newly discovered ACT-R types start with one agent per type. The human-controlled agent is disabled by default.
+
+### Environment
+
+The environment is rendered by `gui/environment_canvas.py`.
+
+Agents are placed on a simple matrix, can share cells, and are displayed with stable per-name colors. The human-controlled entity uses a distinct orange marker.
+
+Visual stimuli are rebuilt from the current matrix state before ACT-R processing. Only pyactr-compatible stimulus fields are passed to the visual system:
+
+- `text`
+- `position`
+- optional `vis_delay`
+
+Additional GUI and entity metadata are stored separately and are not inserted into pyactr visual chunks.
 
 ### Agent Inspector
 
-Runtime ACT-R agents are grouped by type in an expandable tree. Selecting an agent opens:
+Runtime ACT-R agents are grouped by type in an expandable tree.
+
+Selecting an agent opens:
 
 - Step Timeline
 - Declarative Memory graph
-- one tab for every buffer in the active pyactr simulation
+- one tab for every buffer found in the running pyactr simulation
 - current buffer content and module state
-- complete buffer-change history
+- complete change history for each buffer
 
-Buffer names are read from the running pyactr model; custom goal, retrieval, visual, imaginal, or other named buffers therefore appear without fixed naming assumptions.
+Buffer names are obtained from the active pyactr buffer mapping. Custom goal, retrieval, visual, imaginal, or other user-defined buffers therefore appear without fixed naming assumptions.
 
 ### History ZIP
 
 The regular export contains:
 
-- manifest and full simulation configuration, including backend and ROS parameters
-- global timeline in JSON, JSONL, and CSV
+- manifest and simulation configuration
+- global event timeline in JSON, JSONL, and CSV
 - per-agent timelines
 - separate histories for every ACT-R buffer
-- final environment/shadow-map occupancy
+- final environment occupancy
 - production metadata
 - declarative-memory snapshots
-- human events when enabled
-- ROS movement and error events when ROS mode is active
+- human movement events and human entity metadata when enabled
 
 ## Agent Analysis
 
+Agent models and optional adapters are discovered dynamically in `agents/`.
+
 ### State Graph
 
-The graph uses the productions of the fully built pyactr model, including rules created in loops and helper methods. Goal control states are derived from the slots actually read by productions. Production edges and adapter goal-buffer overrides are displayed separately, with branch guards, terminal states, loops, genuine dead ends, and statically unreachable productions. Production Jump uses the same combined production/adapter control-flow model.
+The State Graph is derived from the agent model and optional adapter.
+
+It shows:
+
+- control states derived from relevant buffer conditions
+- production transitions
+- adapter-driven state changes
+- production names on edges
+- loops
+- terminal states
+- dead ends
+- statically unreachable productions
+- prerequisite paths used by Production Jump
+
+The graph layout uses:
+
+- deterministic production and adapter edge identifiers
+- orthogonal edge routing
+- separate edge ports
+- collision avoidance around nodes
+- parallel lanes for otherwise overlapping edges
+- separate styling for production and adapter transitions
+
+Simple constants, attributes, lists, indexed expressions, and local f-string expressions defined in the agent file are resolved where possible.
+
+Adapter references through the associated main-agent object are included when the referenced value can be determined safely.
 
 ### Buffer Interactions
 
-Separate interaction matrices show which productions and production-triggered adapter handlers read, request, clear, or overwrite each dynamically discovered buffer. Matrix cells replace crossing connection lines and adapter rows identify the productions that activate each handler.
+Separate access matrices show which productions and adapter handlers:
+
+- read a buffer
+- write or request a buffer
+- read and write a buffer
+- clear a buffer
+
+Production accesses and adapter accesses are displayed separately to avoid ambiguous overlapping connection lines.
 
 ### Declarative Memory
 
-The static analysis distinguishes explicit declarative-memory writes from chunks that are only created for a goal or imaginal buffer. It also displays the buffers linked to each declarative memory by pyactr, explicit additions or deletions, chunk references, and weaker shared-value associations. Runtime graphs use the actual memory mappings of the active pyactr model.
+The analysis reads:
 
-All graphs support zooming, panning, and transparent PNG or SVG export.
+- chunk construction
+- named declarative memories
+- explicit memory additions
+- retrieval relationships
+- deletions
+- chunk-slot references
+- shared values
+- pyactr buffer-to-memory relationships
+
+The graph distinguishes between:
+
+- actual declarative-memory chunks
+- statically detected memory writes
+- runtime chunks
+- buffers linked to declarative memory
+- explicit chunk references
+- inferred shared-value relationships
+
+Runtime memory graphs use the actual `decmems` mappings of the active pyactr model.
+
+All analysis graphs support:
+
+- zooming
+- panning
+- fit-to-view
+- transparent PNG export
+- transparent SVG export
+
+For a detailed explanation of the analysis semantics and their limitations, see the [project wiki](../../wiki).
 
 ## Multi Simulation Run
 
-Each scenario can independently select:
+Batch execution is limited to ACT-R agents. Human-controlled agents are removed when interactive settings are transferred into a batch scenario and are disabled again inside every worker process.
 
-- Virtual Environment or ROS Real-life
-- level or ROS shadow map
-- ACT-R agent types and counts
-- ROS interface, namespace, topics/actions, speeds, cell size, and timeout
-- repetition count
-- speed preset
-- simulation-time or production-based termination
+Each scenario supports:
+
+- individual environment and ACT-R-agent settings
+- repetitions
 - parallel or sequential scheduling
+- independent speed preset
+- stop after a simulation-time limit
+- stop after a named production fires for any agent
+- per-run safety limit for processed events
+- configurable aggregate ZIP destination
 
-Virtual scenarios can run in isolated parallel worker processes. ROS scenarios are forced to **Sequential** because they control physical hardware and must not compete for the same robot topics or action servers. A crashed run is documented without terminating other runs.
+Parallel runs execute in isolated processes.
 
-The batch view shows completed percentage, run statuses, errors, and an estimated remaining time based on measured durations. One aggregate ZIP contains the batch configuration, JSON/CSV summaries, each run status, error traces, and every run's complete history archive.
+The automatic worker count considers:
 
-## Project structure
+- logical CPU cores
+- available memory
+- resources reserved for the GUI
+
+A crashed run is documented without stopping other runs.
+
+The batch view displays:
+
+- completed percentage
+- active and completed runs
+- estimated remaining time based on measured run durations and effective parallelism
+- individual statuses and errors
+
+One aggregate ZIP contains:
+
+- batch configuration
+- JSON and CSV summaries
+- status and error information for every run
+- each run's complete regular history export
+
+Detailed batch configuration examples are provided in the [project wiki](../../wiki).
+
+## Agent Plug-ins
 
 ```text
-main.py
-assets/
-  actr_icon.ico
-  actr_icon.png
 agents/
   Example.py
   ExampleAdapter.py
-  Runner.py
-  RunnerAdapter.py
-  JohannesAgent.py
-  JohannesAgentAdapter.py
+```
+
+`<Type>.py` contains the ACT-R model.
+
+`<Type>Adapter.py` is optional. Missing adapters use a no-op adapter; invalid adapters are reported in the configuration view.
+
+Adapters can access the active agent wrapper and use helpers from:
+
+```text
+simulation/integrations/pyactr_extension.py
+```
+
+The helpers cover:
+
+- named-buffer access and replacement
+- goal and imaginal operations
+- production utilities
+- declarative-memory access
+- chunk creation
+- ACT-R event inspection
+
+See the [project wiki](../../wiki) for the complete agent and adapter development guide.
+
+## Project Structure
+
+```text
+main.py
+requirements.txt
+README.md
+
+assets/
+  actr_icon.ico
+  actr_icon.png
+
+agents/
+  <AgentType>.py
+  <AgentType>Adapter.py
+
 gui/
   application.py
+  resources.py
   main_window.py
+  human_input_controller.py
   simulation_config_view.py
-  multi_simulation_view.py
   environment_view.py
   environment_canvas.py
   step_log_view.py
@@ -224,12 +284,14 @@ gui/
   declarative_memory_view.py
   agent_analysis_view.py
   analysis_graphs.py
+  graph_layout.py
   jump_progress_dialog.py
-  human_input_controller.py
+  multi_simulation_view.py
   mode_toggle.py
   agent_tree.py
   timeline_model.py
   styles.py
+
 simulation/
   runtime/
     simulation.py
@@ -237,44 +299,72 @@ simulation/
     agent_type_factory.py
     middleman.py
     tracer.py
+
   world/
     entities.py
     human_agent.py
     environment.py
-    factory.py
     level_builder.py
-  integrations/
-    pyactr_extension.py
-    ros_turtle_bridge.py
+
   config/
     models.py
     settings_store.py
+
   discovery/
     agent_discovery.py
+
   inspection/
     buffer_history.py
     declarative_memory.py
     source_analysis.py
+
+  integrations/
+    pyactr_extension.py
+
   export/
     history_export.py
+
   batch/
     multi_run.py
 ```
 
-## Source integration
+## Scope of Static Analysis
 
-The virtual TurtleBot entities, exercise environment, Runner model, and movement semantics are integrated from the repository's master branch. The Johannes laboratory map, Johannes agent/adapter concepts, and iRobot Create ROS action interface are integrated from `johannes_branch` and adapted to the current modular PyQt6 runtime.
+Source-derived graphs describe structures that can be determined from the available Python files.
 
-## Scope of source analysis
+The analysis can identify common patterns such as:
 
-Source-derived graphs show structures that can be determined from the available Python model and adapter files. Runtime-generated productions, arbitrary dynamic Python execution, and external side effects may only become visible during an active simulation.
+- `productionstring(...)` declarations
+- dynamically generated production families
+- goal-state transitions
+- adapter-triggered state changes
+- buffer reads and writes
+- declarative-memory operations
+- locally resolvable variables and f-strings
 
-## Regression tests
+The following may only become visible during an active simulation:
 
-```bash
-python -m unittest discover -s tests -v
-```
+- arbitrary dynamic Python execution
+- externally loaded productions
+- runtime-only source modifications
+- external data-dependent behavior
+- side effects outside recognized model or adapter patterns
 
-The included tests cover pyactr stimulus sanitization, safe continuation after an EmptySchedule reset, and the presence of all Johannes Lab terrain entities.
-#   a c t r - h m i - s t u d e n t - p r o j e c t - 2 0 2 6  
- 
+Static reachability therefore describes the behavior derivable from the available source code. It is an explainability aid rather than a formal verification proof.
+
+## Documentation
+
+The [project wiki](../../wiki) contains detailed instructions for:
+
+- installation and virtual environments
+- interactive simulation
+- Step and Automatic execution
+- Production Jump
+- visual stimulus handling
+- creating ACT-R agents
+- creating adapters
+- working with buffers and declarative memory
+- understanding Agent Analysis
+- configuring Multi Simulation Run
+- interpreting history exports
+- troubleshooting
