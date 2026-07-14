@@ -39,13 +39,10 @@ from simulation.inspection.declarative_memory import DeclarativeMemorySnapshot
 from gui.graph_layout import (
     LayoutEdge,
     LayoutNode,
-    NodePlacement,
-    _scale_placements,
     assign_label_positions,
-    layout_and_route,
-    route_fixed_nodes,
-    separate_overlapping_routes,
 )
+
+from gui.ux_graph_layout import layout_state_graph, route_semantic_columns
 
 from simulation.inspection.source_analysis import (
     AgentStaticAnalysis,
@@ -330,17 +327,36 @@ def build_state_transition_scene(analysis: AgentStaticAnalysis) -> QGraphicsScen
         )
         for state_id, state in reachable_states.items()
     ]
-    layout_edges = [
-        LayoutEdge(
-            edge_id=transition.transition_id,
-            source_id=transition.source_state_id,
-            target_id=transition.target_state_id,
-            kind=transition.kind,
-            weight=1.25 if transition.kind == "adapter" else 1.0,
+    # Visually aggregate semantically parallel transitions. The complete
+    # transition set remains available in tooltips, the detail catalogue, and
+    # Export for LLM, while the overview graph draws one traceable route per
+    # source/target/family tuple.
+    transition_bundles: dict[tuple[str, str, str], list[StateTransitionAnalysis]] = defaultdict(list)
+    for transition in transitions:
+        transition_bundles[(
+            transition.source_state_id,
+            transition.target_state_id,
+            transition.kind,
+        )].append(transition)
+    bundle_transitions: dict[str, list[StateTransitionAnalysis]] = {}
+    layout_edges: list[LayoutEdge] = []
+    for index, (key, values) in enumerate(sorted(transition_bundles.items())):
+        source_id, target_id, kind = key
+        bundle_id = f"bundle:{kind}:{index}"
+        bundle_transitions[bundle_id] = sorted(
+            values, key=lambda item: (item.label.casefold(), item.transition_id)
         )
-        for transition in transitions
-    ]
-    geometry = layout_and_route(
+        layout_edges.append(
+            LayoutEdge(
+                edge_id=bundle_id,
+                source_id=source_id,
+                target_id=target_id,
+                kind=kind,
+                weight=1.0 + min(0.8, 0.12 * (len(values) - 1)),
+            )
+        )
+
+    geometry = layout_state_graph(
         layout_nodes,
         layout_edges,
         initial_node_id=analysis.initial_state_id,
@@ -349,10 +365,11 @@ def build_state_transition_scene(analysis: AgentStaticAnalysis) -> QGraphicsScen
     _translate_layout_below(
         geometry, legend_bounds.bottom() + 42.0
     )
-    display_routes = separate_overlapping_routes(
-        geometry.routes.values(),
-        placements=geometry.placements,
-    )
+    # The layered channel router already assigns an independent route and
+    # minimum lane spacing to every transition. Post-routing lane shifts are
+    # deliberately avoided because they can turn short paths into artificial
+    # perimeter loops.
+    display_routes = dict(geometry.routes)
     _translate_rendered_layout_below(
         geometry, display_routes, legend_bounds.bottom() + 42.0
     )
@@ -395,8 +412,6 @@ def build_state_transition_scene(analysis: AgentStaticAnalysis) -> QGraphicsScen
         [placement.rect for placement in geometry.placements.values()],
     )
 
-    transition_by_id = {item.transition_id: item for item in transitions}
-
     # Number production and adapter transitions independently in deterministic
     # graph order.  The same order is reused by the detail catalogue below, so
     # P1..Pn and A1..An can be found without scanning a mixed list.
@@ -414,54 +429,53 @@ def build_state_transition_scene(analysis: AgentStaticAnalysis) -> QGraphicsScen
         "adapter": [],
     }
     for edge_id, route in display_routes.items():
-        transition = transition_by_id[edge_id]
-        code = code_by_id[edge_id]
-        color = QColor("#f0abfc") if transition.kind == "adapter" else QColor("#7dd3fc")
+        bundled = bundle_transitions[edge_id]
+        kind = bundled[0].kind
+        codes = [code_by_id[item.transition_id] for item in bundled]
+        color = QColor("#f0abfc") if kind == "adapter" else QColor("#7dd3fc")
 
-        # A wide background-coloured underlay creates a visual bridge at every
-        # crossing.  Dashed adapter edges therefore never disappear into solid
-        # production edges, even when they cross at the same coordinate.
         halo_pen = QPen(SCENE_BACKGROUND, 7.0)
         halo_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         halo_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         halo_item = _add_polyline_path(scene, route.points, halo_pen)
         halo_item.setZValue(0.0)
 
-        pen = QPen(color, 2.4 if transition.kind == "adapter" else 2.25)
+        pen = QPen(color, 2.4 if kind == "adapter" else 2.25)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        if transition.kind == "adapter":
+        if kind == "adapter":
             pen.setStyle(Qt.PenStyle.CustomDashLine)
             pen.setDashPattern([7.0, 4.0])
-            pen.setDashOffset((_numeric_code(code) % 4) * 2.0)
+            pen.setDashOffset((_numeric_code(codes[0]) % 4) * 2.0)
         path_item = _add_polyline_path(scene, route.points, pen)
         path_item.setZValue(1.0)
-        tooltip = (
-            f"{code} · {transition.kind}: {transition.label}\n"
-            f"Guard: {transition.guard_label or 'none'}\n"
-            f"Actions: {transition.action_label or 'control-state update'}"
-        )
+
+        tooltip_parts = []
+        for transition, code in zip(bundled, codes):
+            tooltip_parts.append(
+                f"{code} · {transition.kind}: {transition.label}\n"
+                f"Guard: {transition.guard_label or 'none'}\n"
+                f"Actions: {transition.action_label or 'control-state update'}"
+            )
+        tooltip = "\n\n".join(tooltip_parts)
         path_item.setToolTip(tooltip)
         if len(route.points) >= 2:
             _draw_arrow(scene, route.points[-2], route.points[-1], color)
-        label = _add_edge_label(
-            scene, code, label_positions[edge_id], color
-        )
+        code_label = _compact_code_range(codes)
+        label = _add_edge_label(scene, code_label, label_positions[edge_id], color)
         label.setToolTip(tooltip)
-        source = reachable_states[transition.source_state_id]
-        target = reachable_states[transition.target_state_id]
-        detail = transition.label
-        if transition.guard_label:
-            detail += f" | guard: {transition.guard_label.replace(chr(10), '; ')}"
-        if transition.action_label:
-            detail += f" | action: {transition.action_label.replace(chr(10), '; ')}"
-        details_by_kind[transition.kind].append(
-            (
-                code,
-                f"{source.label} → {target.label}\n{detail}",
-                color,
+
+        for transition, code in zip(bundled, codes):
+            source = reachable_states[transition.source_state_id]
+            target = reachable_states[transition.target_state_id]
+            detail = transition.label
+            if transition.guard_label:
+                detail += f" | guard: {transition.guard_label.replace(chr(10), '; ')}"
+            if transition.action_label:
+                detail += f" | action: {transition.action_label.replace(chr(10), '; ')}"
+            details_by_kind[transition.kind].append(
+                (code, f"{source.label} → {target.label}\n{detail}", color)
             )
-        )
 
     _add_route_bundle_markers(scene, list(display_routes.values()))
 
@@ -856,7 +870,13 @@ def build_declarative_memory_scene(
     *,
     title: str,
 ) -> QGraphicsScene:
-    """Render memory contents and operations with obstacle-aware orthogonal routes."""
+    """Render a semantic memory overview without dense containment spaghetti.
+
+    Memory membership is encoded spatially through chunk-type sections. Only
+    explicit chunk references are drawn. Weaker shared-value associations remain
+    available in Export for LLM and are summarized rather than rendered as a
+    quadratic edge cloud.
+    """
     scene = _new_scene()
     _add_scene_title(scene, title)
     legend_bounds = _add_legend(
@@ -865,10 +885,10 @@ def build_declarative_memory_scene(
             ("Memory", QColor("#1d4ed8"), "box"),
             ("Runtime chunk", QColor("#0f766e"), "box"),
             ("Explicit static DM chunk", QColor("#6d28d9"), "box"),
-            ("Buffer harvest/retrieval link", QColor("#22d3ee"), "dash"),
-            ("Explicit memory write", QColor("#f59e0b"), "line"),
+            ("Buffer links", QColor("#155e75"), "box"),
+            ("Memory-write operation", QColor("#f59e0b"), "box"),
             ("Chunk reference", QColor("#38bdf8"), "line"),
-            ("Shared value", QColor("#94a3b8"), "dash"),
+            ("Shared values summarized", QColor("#94a3b8"), "box"),
         ],
         y=52,
         max_width=1500,
@@ -882,204 +902,192 @@ def build_declarative_memory_scene(
         return scene
 
     buffer_links = [
-        operation
-        for operation in snapshot.operations
+        operation for operation in snapshot.operations
         if str(operation.get("mode")) == "buffer_link"
     ]
     memory_ops = [
-        operation
-        for operation in snapshot.operations
+        operation for operation in snapshot.operations
         if str(operation.get("mode")) != "buffer_link"
     ]
-    chunks_by_memory: dict[str, list[Any]] = defaultdict(list)
-    for chunk in snapshot.chunks:
-        chunks_by_memory[chunk.memory_name].append(chunk)
+    shared_edges = [edge for edge in snapshot.edges if edge.relation == "shared_value"]
+    reference_edges = [edge for edge in snapshot.edges if edge.relation == "reference"]
 
     node_rects: dict[str, QRectF] = {}
     node_specs: dict[str, tuple[str, QColor, int, QColor | None]] = {}
     edge_specs: list[tuple[LayoutEdge, QColor, Qt.PenStyle, str]] = []
 
-    top = legend_bounds.bottom() + 120.0
-    left_x = 36.0
-    buffer_width = 320.0
-    center_x = 520.0
-    memory_width = 330.0
-    memory_column_gap = 470.0
+    top = legend_bounds.bottom() + 92.0
+    section_width = 350.0
+    section_gap = 76.0
+    section_columns = 4
+    left = 42.0
 
-    if buffer_links:
-        heading = QGraphicsSimpleTextItem("Buffers linked by pyactr simulation()")
-        heading.setBrush(QBrush(QColor("#f8fafc")))
-        heading.setPos(left_x, top - 38.0)
-        scene.addItem(heading)
-    for index, operation in enumerate(buffer_links):
-        node_id = f"buffer:{index}"
-        rect = QRectF(left_x, top + index * 88.0, buffer_width, 58.0)
+    # Memory roots form a small, stable header row.
+    memory_node_ids: dict[str, str] = {}
+    for index, memory_name in enumerate(memory_names):
+        node_id = f"memory:{memory_name}"
+        memory_node_ids[memory_name] = node_id
+        rect = QRectF(left + index * 390.0, top, 330.0, 68.0)
         node_rects[node_id] = rect
         node_specs[node_id] = (
-            str(operation.get("actor", "buffer")),
-            QColor("#155e75"),
-            38,
-            QColor("#a5f3fc"),
-        )
-
-    memory_rects: dict[str, str] = {}
-    chunk_ids: dict[str, str] = {}
-    max_memory_bottom = top
-    for memory_index, memory_name in enumerate(memory_names):
-        x = center_x + memory_index * memory_column_gap
-        memory_id = f"memory:{memory_name}"
-        memory_rects[memory_name] = memory_id
-        memory_rect = QRectF(x, top, memory_width, 70.0)
-        node_rects[memory_id] = memory_rect
-        node_specs[memory_id] = (
             f"Memory: {memory_name}", QColor("#1d4ed8"), 36, QColor("#bfdbfe")
         )
-        y = memory_rect.bottom() + 58.0
-        for chunk_index, chunk in enumerate(chunks_by_memory.get(memory_name, [])):
+
+    # Aggregate all linked buffers into one readable node instead of eight
+    # visually identical routes.
+    if buffer_links:
+        names = sorted({str(item.get("actor", "buffer")) for item in buffer_links})
+        buffer_id = "buffer-links"
+        buffer_label = "Buffers linked by pyactr\n" + "\n".join(names)
+        height = max(76.0, 34.0 + len(names) * 22.0)
+        rect = QRectF(left, top + 108.0, 350.0, height)
+        node_rects[buffer_id] = rect
+        node_specs[buffer_id] = (
+            buffer_label, QColor("#155e75"), 42, QColor("#a5f3fc")
+        )
+
+    chunks_by_key: dict[tuple[str, str], list[Any]] = defaultdict(list)
+    for chunk in snapshot.chunks:
+        chunks_by_key[(chunk.memory_name, chunk.chunk_type)].append(chunk)
+
+    preferred_types = [
+        "semantic_concept", "knowledge_relation", "strategy_schema",
+        "cell_memory", "spatial_relation", "target_memory", "episode_memory",
+    ]
+    type_order = {name: index for index, name in enumerate(preferred_types)}
+    section_keys = sorted(
+        chunks_by_key,
+        key=lambda key: (
+            memory_names.index(key[0]) if key[0] in memory_names else 10**6,
+            type_order.get(key[1], 10**5), key[1].casefold(),
+        ),
+    )
+
+    # Pre-calculate section heights so rows never overlap.
+    section_heights: dict[tuple[str, str], float] = {}
+    chunk_heights: dict[str, float] = {}
+    for key in section_keys:
+        total = 58.0
+        for chunk in chunks_by_key[key]:
             detail = chunk.label
             if chunk.traces:
-                detail += "\ntraces=" + ", ".join(
-                    f"{value:.3f}" for value in chunk.traces[-4:]
-                )
+                detail += "\ntraces=" + ", ".join(f"{value:.3f}" for value in chunk.traces[-4:])
             if chunk.activation is not None:
                 detail += f"\nactivation={chunk.activation:.3f}"
             height = max(
-                90.0,
-                _label_rect(
-                    _wrap_label(detail, 40), QFont("Sans Serif", 9), memory_width, 28
-                ).height(),
+                92.0,
+                _label_rect(_wrap_label(detail, 40), QFont("Sans Serif", 9), section_width, 28).height(),
             )
-            chunk_node_id = f"chunk:{chunk.chunk_id}"
-            chunk_ids[chunk.chunk_id] = chunk_node_id
-            rect = QRectF(x, y, memory_width, height)
-            node_rects[chunk_node_id] = rect
-            node_specs[chunk_node_id] = (
+            chunk_heights[chunk.chunk_id] = height
+            total += height + 24.0
+        section_heights[key] = total + 18.0
+
+    section_top = top + max(
+        210.0,
+        (node_rects.get("buffer-links") or QRectF()).bottom() - top + 54.0,
+    )
+    row_tops: list[float] = []
+    current_y = section_top
+    for row_start in range(0, len(section_keys), section_columns):
+        row = section_keys[row_start:row_start + section_columns]
+        row_tops.append(current_y)
+        current_y += max((section_heights[key] for key in row), default=0.0) + 72.0
+
+    chunk_ids: dict[str, str] = {}
+    semantic_column_by_node: dict[str, int] = {}
+    for section_index, key in enumerate(section_keys):
+        memory_name, chunk_type = key
+        row = section_index // section_columns
+        column = section_index % section_columns
+        x = left + column * (section_width + section_gap)
+        y = row_tops[row]
+        header_id = f"section:{memory_name}:{chunk_type}"
+        header_rect = QRectF(x, y, section_width, 54.0)
+        node_rects[header_id] = header_rect
+        semantic_column_by_node[header_id] = column
+        node_specs[header_id] = (
+            f"{chunk_type}\n{len(chunks_by_key[key])} chunk(s)",
+            QColor("#334155"), 42, QColor("#94a3b8"),
+        )
+        chunk_y = header_rect.bottom() + 22.0
+        for chunk in chunks_by_key[key]:
+            detail = chunk.label
+            if chunk.traces:
+                detail += "\ntraces=" + ", ".join(f"{value:.3f}" for value in chunk.traces[-4:])
+            if chunk.activation is not None:
+                detail += f"\nactivation={chunk.activation:.3f}"
+            chunk_id = f"chunk:{chunk.chunk_id}"
+            chunk_ids[chunk.chunk_id] = chunk_id
+            rect = QRectF(x, chunk_y, section_width, chunk_heights[chunk.chunk_id])
+            node_rects[chunk_id] = rect
+            semantic_column_by_node[chunk_id] = column
+            node_specs[chunk_id] = (
                 detail,
                 QColor("#0f766e") if chunk.source == "runtime" else QColor("#6d28d9"),
                 40,
                 QColor("#dbeafe"),
             )
-            edge_specs.append(
-                (
-                    LayoutEdge(
-                        f"contains:{memory_name}:{chunk_index}",
-                        memory_id,
-                        chunk_node_id,
-                        "contains",
-                    ),
-                    QColor("#64748b"),
-                    Qt.PenStyle.SolidLine,
-                    "",
-                )
-            )
-            y += height + 52.0
-        max_memory_bottom = max(max_memory_bottom, y)
+            chunk_y = rect.bottom() + 24.0
 
-    # Place explicit operations below the tallest memory column so their routes
-    # do not pass through chunks or buffer nodes.
-    operations_y = max(
-        max_memory_bottom + 80.0,
-        top + max(1, len(buffer_links)) * 88.0 + 90.0,
-    )
-    if memory_ops:
-        heading = QGraphicsSimpleTextItem("Explicit memory operations")
-        heading.setBrush(QBrush(QColor("#f8fafc")))
-        heading.setPos(left_x, operations_y - 42.0)
-        scene.addItem(heading)
-    for index, operation in enumerate(memory_ops):
-        column = index % 2
-        row = index // 2
-        node_id = f"operation:{index}"
-        x = left_x + column * 390.0
-        y = operations_y + row * 112.0
-        rect = QRectF(x, y, 350.0, 78.0)
-        mode = str(operation.get("mode", "access"))
-        color = (
-            QColor("#be123c")
-            if mode in {"delete", "clear"}
-            else QColor("#f59e0b")
-            if mode in {"write", "add"}
-            else QColor("#1d4ed8")
-        )
-        label = (
-            f"{operation.get('actor', 'code')}\n"
-            f"{mode} → {operation.get('memory_name', 'decmem')}\n"
-            f"{operation.get('detail', '')}"
-        )
+    # Aggregate repeated memory writes by actor/mode/memory.
+    operation_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for operation in memory_ops:
+        operation_groups[(
+            str(operation.get("actor", "code")),
+            str(operation.get("mode", "access")),
+            str(operation.get("memory_name", "decmem")),
+        )].append(operation)
+    operations_y = current_y
+    for index, (key, values) in enumerate(sorted(operation_groups.items())):
+        actor, mode, memory_name = key
+        column = index % 3
+        row = index // 3
+        node_id = f"operation-group:{index}"
+        details = [str(item.get("detail", "")) for item in values if item.get("detail")]
+        preview = ", ".join(details[:4])
+        if len(details) > 4:
+            preview += f", +{len(details) - 4} more"
+        label = f"{actor}\n{mode} → {memory_name} · {len(values)} operation(s)"
+        if preview:
+            label += "\n" + preview
+        rect = QRectF(left + column * 470.0, operations_y + row * 116.0, 430.0, 88.0)
+        color = QColor("#be123c") if mode in {"delete", "clear"} else QColor("#f59e0b")
         node_rects[node_id] = rect
-        node_specs[node_id] = (label, color, 44, QColor("#e2e8f0"))
+        node_specs[node_id] = (label, color, 52, QColor("#e2e8f0"))
 
-    # Add all semantic edges after every obstacle is known.
-    for index, operation in enumerate(buffer_links):
-        target = memory_rects.get(str(operation.get("memory_name", "decmem")))
-        if target:
-            edge_specs.append(
-                (
-                    LayoutEdge(f"buffer-link:{index}", f"buffer:{index}", target, "buffer_link"),
-                    QColor("#22d3ee"),
-                    Qt.PenStyle.DashLine,
-                    "",
-                )
-            )
-    for index, operation in enumerate(memory_ops):
-        target = memory_rects.get(str(operation.get("memory_name", "decmem")))
-        if target:
-            mode = str(operation.get("mode", "access"))
-            color = (
-                QColor("#be123c")
-                if mode in {"delete", "clear"}
-                else QColor("#f59e0b")
-                if mode in {"write", "add"}
-                else QColor("#1d4ed8")
-            )
-            edge_specs.append(
-                (
-                    LayoutEdge(f"memory-op:{index}", f"operation:{index}", target, mode),
-                    color,
-                    Qt.PenStyle.SolidLine,
-                    mode,
-                )
-            )
-    for index, edge in enumerate(snapshot.edges):
+    # Only semantically explicit references are rendered as graph edges.
+    for index, edge in enumerate(reference_edges):
         source = chunk_ids.get(edge.source_id)
         target = chunk_ids.get(edge.target_id)
-        if source is None or target is None:
-            continue
-        color = QColor("#38bdf8") if edge.relation == "reference" else QColor("#94a3b8")
-        style = Qt.PenStyle.SolidLine if edge.relation == "reference" else Qt.PenStyle.DashLine
-        edge_specs.append(
-            (
-                LayoutEdge(f"chunk-edge:{index}", source, target, edge.relation),
-                color,
-                style,
-                edge.label,
-            )
-        )
+        if source and target:
+            edge_specs.append((
+                LayoutEdge(f"chunk-reference:{index}", source, target, "reference"),
+                QColor("#38bdf8"), Qt.PenStyle.SolidLine, edge.label,
+            ))
+
+    summary_y = operations_y + ((len(operation_groups) + 2) // 3) * 116.0 + 24.0
+    summary_id = "shared-value-summary"
+    summary_rect = QRectF(left, summary_y, 700.0, 72.0)
+    node_rects[summary_id] = summary_rect
+    node_specs[summary_id] = (
+        f"Shared-value associations summarized: {len(shared_edges)}\n"
+        "The complete association set remains available through Export for LLM.",
+        QColor("#334155"), 78, QColor("#94a3b8"),
+    )
 
     for node_id, rect in node_rects.items():
         label, color, wrap, border = node_specs[node_id]
-        _add_node(
-            scene, rect, label, color, wrap_width=wrap, border_color=border
-        )
+        _add_node(scene, rect, label, color, wrap_width=wrap, border_color=border)
 
-    routes = route_fixed_nodes(
-        node_rects, [spec[0] for spec in edge_specs]
+    layout_edge_values = [spec[0] for spec in edge_specs]
+    display_routes = route_semantic_columns(
+        node_rects,
+        layout_edge_values,
+        column_by_node=semantic_column_by_node,
+        section_top=section_top,
+        lane_gap=22.0,
     )
-    fixed_placements = {
-        node_id: NodePlacement(
-            LayoutNode(node_id, node_id, "fixed", rect.width(), rect.height()),
-            rect,
-            0,
-            index,
-        )
-        for index, (node_id, rect) in enumerate(node_rects.items())
-    }
-    display_routes = separate_overlapping_routes(
-        routes.values(),
-        placements=fixed_placements,
-        preferred_lane_gap=22.0,
-        minimum_lane_gap=18.0,
-    )
+
     edge_render = {spec[0].edge_id: spec[1:] for spec in edge_specs}
     label_font = QFont("Sans Serif", 9)
     label_metrics = QFontMetrics(label_font)
@@ -1088,15 +1096,11 @@ def build_declarative_memory_scene(
             max(42.0, float(label_metrics.horizontalAdvance(str(values[2]))) + 18.0),
             25.0,
         )
-        for edge_id, values in edge_render.items()
-        if values[2]
+        for edge_id, values in edge_render.items() if values[2]
     }
     label_positions = assign_label_positions(
-        display_routes.values(),
-        node_rects.values(),
-        label_width=42.0,
-        label_height=25.0,
-        label_sizes=label_sizes,
+        display_routes.values(), node_rects.values(),
+        label_width=42.0, label_height=25.0, label_sizes=label_sizes,
     )
     for edge_id, route in display_routes.items():
         color, style, label_text = edge_render[edge_id]
@@ -1114,6 +1118,22 @@ def build_declarative_memory_scene(
         if label_text:
             _add_edge_label(scene, label_text, label_positions[edge_id], color)
     return scene
+
+
+def _rect_union_for_scene(rects: Iterable[QRectF], routes: Iterable[Any]) -> QRectF:
+    values = [QRectF(rect) for rect in rects]
+    for route in routes:
+        if route.points:
+            xs = [point.x() for point in route.points]
+            ys = [point.y() for point in route.points]
+            values.append(QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)))
+    if not values:
+        return QRectF()
+    result = QRectF(values[0])
+    for rect in values[1:]:
+        result = result.united(rect)
+    return result
+
 
 def _ordered_transition_progress(
     path: list[StateTransitionAnalysis], fired_productions: list[str]
@@ -1330,6 +1350,21 @@ def _ordered_transitions_for_codes(
         )
 
     return sorted(transitions, key=key)
+
+
+def _compact_code_range(codes: list[str]) -> str:
+    """Compact a visual edge bundle without hiding its individual transitions."""
+    if not codes:
+        return ""
+    if len(codes) == 1:
+        return codes[0]
+    prefix = codes[0][0]
+    numbers = sorted(_numeric_code(code) for code in codes)
+    if all(b == a + 1 for a, b in zip(numbers, numbers[1:])):
+        return f"{prefix}{numbers[0]}–{prefix}{numbers[-1]}"
+    if len(codes) <= 3:
+        return ", ".join(codes)
+    return f"{codes[0]} +{len(codes) - 1}"
 
 
 def _add_edge_label(
