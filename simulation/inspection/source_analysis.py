@@ -50,6 +50,8 @@ class ProductionAnalysis:
     target_state_id: str = ""
     guard_label: str = ""
     action_label: str = ""
+    utility: float | None = None
+    reward: float | None = None
 
 
 @dataclass(slots=True)
@@ -84,6 +86,8 @@ class StateTransitionAnalysis:
     production_name: str | None = None
     adapter_method: str | None = None
     trigger_production: str | None = None
+    utility: float | None = None
+    reward: float | None = None
 
 
 @dataclass(slots=True)
@@ -264,13 +268,19 @@ class AgentSourceAnalyzer:
                 model_source, model_constants
             )
             memory_names = ["decmem"]
+            preferred_control_slots = None
         else:
             initial_state = runtime["initial_state"]
             productions = runtime["productions"]
             declared_buffers = runtime["declared_buffers"]
             memory_names = runtime["memory_names"]
+            preferred_control_slots = runtime.get("control_slots")
 
-        control_slots = self._control_slots(productions, initial_state)
+        control_slots = (
+            list(preferred_control_slots)
+            if preferred_control_slots
+            else self._control_slots(productions, initial_state)
+        )
         states: dict[str, ControlStateAnalysis] = {}
         production_transitions = self._build_production_transitions(
             productions, initial_state, control_slots, states
@@ -401,6 +411,12 @@ class AgentSourceAnalyzer:
                         repr(production),
                         conditions,
                         effects,
+                        utility=float(production["utility"]),
+                        reward=(
+                            None
+                            if getattr(production, "reward", None) is None
+                            else float(production.reward)
+                        ),
                     )
                 )
             buffers = getattr(model, "_ACTRModel__buffers", {})
@@ -411,11 +427,19 @@ class AgentSourceAnalyzer:
                 (str(name) for name in getattr(model, "decmems", {}).keys()),
                 key=str.lower,
             ) or ["decmem"]
+            preferred_control_slots = getattr(
+                construct, "analysis_control_slots", None
+            )
             return {
                 "initial_state": initial_state,
                 "productions": productions,
                 "declared_buffers": declared_buffers,
                 "memory_names": memory_names,
+                "control_slots": (
+                    list(preferred_control_slots)
+                    if preferred_control_slots
+                    else None
+                ),
             }
         except Exception:
             return None
@@ -507,6 +531,9 @@ class AgentSourceAnalyzer:
         raw_string: str,
         conditions: dict[str, dict[str, Any]],
         effects: dict[str, dict[str, Any]],
+        *,
+        utility: float | None = None,
+        reward: float | None = None,
     ) -> ProductionAnalysis:
         read_buffers = sorted(conditions, key=str.lower)
         written_buffers = sorted(
@@ -526,6 +553,8 @@ class AgentSourceAnalyzer:
             effects=effects,
             read_buffers=read_buffers,
             written_buffers=written_buffers,
+            utility=utility,
+            reward=reward,
         )
 
     # ------------------------------------------------------------------
@@ -577,6 +606,8 @@ class AgentSourceAnalyzer:
                     guard_label=guard,
                     action_label=action,
                     production_name=production.name,
+                    utility=production.utility,
+                    reward=production.reward,
                 )
             )
         return transitions
@@ -794,63 +825,115 @@ class AgentSourceAnalyzer:
             for node in ast.walk(tree)
             if isinstance(node, ast.FunctionDef)
         }
+        method_calls: dict[str, set[str]] = defaultdict(set)
+        for method_name, method in methods.items():
+            for node in ast.walk(method):
+                if not isinstance(node, ast.Call):
+                    continue
+                called = self._self_method_name(node.func)
+                if called and called in methods and called != method_name:
+                    method_calls[method_name].add(called)
+
         production_by_name = {item.name: item for item in productions}
         interactions_by_method: dict[str, list[MethodBufferInteraction]] = defaultdict(list)
         for interaction in interactions:
             interactions_by_method[interaction.method_name].append(interaction)
 
+        set_goal_method = methods.get("_set_goal")
+        set_goal_parameters = (
+            [argument.arg for argument in set_goal_method.args.args if argument.arg != "self"]
+            if set_goal_method is not None
+            else ["phase", "state", "previous"]
+        )
+
         transitions: list[StateTransitionAnalysis] = []
         sequence = 0
-        for method_name, trigger_names in dispatch.items():
-            method = methods.get(method_name)
-            if method is None:
+        for root_method_name, trigger_names in dispatch.items():
+            root_method = methods.get(root_method_name)
+            if root_method is None:
                 continue
-            parent_map = self._parent_map(method)
-            goal_calls = [
-                node
-                for node in ast.walk(method)
-                if isinstance(node, ast.Call)
-                and self._called_name(node.func) == "_set_goal"
-            ]
+            reachable_methods = self._transitive_methods(root_method_name, method_calls)
+            goal_calls: list[tuple[str, ast.FunctionDef, ast.Call]] = []
+            for method_name in reachable_methods:
+                method = methods.get(method_name)
+                if method is None:
+                    continue
+                for node in ast.walk(method):
+                    if (
+                        isinstance(node, ast.Call)
+                        and self._called_name(node.func) == "_set_goal"
+                    ):
+                        goal_calls.append((method_name, method, node))
+
             for trigger_name in trigger_names:
                 production = production_by_name.get(trigger_name)
                 if production is None:
                     continue
-                for call_index, call in enumerate(goal_calls):
-                    phase = self._call_argument(
-                        call, 0, {"phase"}, constants, adapter_mode=True
-                    )
-                    state_value = self._call_argument(
-                        call, 1, {"state"}, constants, adapter_mode=True
-                    )
-                    previous = self._call_argument(
-                        call, 2, {"previous"}, constants, adapter_mode=True
-                    )
+                for call_index, (call_method_name, call_method, call) in enumerate(goal_calls):
+                    resolved_arguments: dict[str, Any] = {}
+                    for parameter_index, parameter_name in enumerate(set_goal_parameters):
+                        value = self._call_argument(
+                            call,
+                            parameter_index,
+                            {parameter_name},
+                            constants,
+                            adapter_mode=True,
+                        )
+                        if value is not None:
+                            resolved_arguments[parameter_name] = value
+                    phase = resolved_arguments.get("phase")
+                    state_value = resolved_arguments.get("state")
                     if not phase or not state_value:
                         continue
+
+                    source_state = states.get(production.target_state_id)
+                    source_slots = dict(source_state.slots) if source_state is not None else {}
+                    target_slots: dict[str, Any] = {}
+                    for slot_name in control_slots:
+                        aliases = [slot_name]
+                        if slot_name == "prev_phase":
+                            aliases.extend(["previous", "previous_phase"])
+                        value = next(
+                            (
+                                resolved_arguments[alias]
+                                for alias in aliases
+                                if alias in resolved_arguments
+                            ),
+                            source_slots.get(slot_name),
+                        )
+                        if value is not None:
+                            target_slots[slot_name] = value
+                    target_type = (
+                        source_state.chunk_type
+                        if source_state is not None and source_state.chunk_type
+                        else "goal"
+                    )
                     target_payload = {
-                        "type": "goal",
+                        "type": target_type,
                         "mode": "write",
-                        "slots": {
-                            "phase": phase,
-                            "state": state_value,
-                            "prev_phase": previous,
-                        },
+                        "slots": target_slots,
                     }
                     target_id = self._ensure_control_state(
                         states, target_payload, control_slots
                     )
                     source_id = production.target_state_id
+                    parent_map = self._parent_map(call_method)
                     condition = self._branch_condition(
                         call,
-                        method,
+                        call_method,
                         parent_map,
                         multiple=len(goal_calls) > 1,
                     )
+                    if call_method_name != root_method_name:
+                        condition = (
+                            f"via {call_method_name}: {condition}"
+                            if condition
+                            else f"via {call_method_name}"
+                        )
                     writes = sorted(
                         {
                             item.buffer_name
-                            for item in interactions_by_method.get(method_name, [])
+                            for item in interactions_by_method.get(root_method_name, [])
                             if item.mode in {"write", "request", "delete", "clear"}
                         },
                         key=str.lower,
@@ -864,16 +947,16 @@ class AgentSourceAnalyzer:
                     transitions.append(
                         StateTransitionAnalysis(
                             transition_id=(
-                                f"adapter:{sequence}:{trigger_name}:{method_name}:"
-                                f"{call_index}"
+                                f"adapter:{sequence}:{trigger_name}:{root_method_name}:"
+                                f"{call_method_name}:{call_index}"
                             ),
                             source_state_id=source_id,
                             target_state_id=target_id,
-                            label=method_name,
+                            label=root_method_name,
                             kind="adapter",
                             guard_label=condition,
                             action_label=action,
-                            adapter_method=method_name,
+                            adapter_method=root_method_name,
                             trigger_production=trigger_name,
                         )
                     )
@@ -1555,6 +1638,12 @@ class AgentSourceAnalyzer:
                     raw,
                     conditions,
                     effects,
+                    utility=self._call_argument(
+                        call, 2, {"utility"}, constants
+                    ),
+                    reward=self._call_argument(
+                        call, 3, {"reward"}, constants
+                    ),
                 )
             )
         return result

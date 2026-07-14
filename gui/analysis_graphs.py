@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import textwrap
 from collections import defaultdict
@@ -38,6 +39,8 @@ from simulation.inspection.declarative_memory import DeclarativeMemorySnapshot
 from gui.graph_layout import (
     LayoutEdge,
     LayoutNode,
+    NodePlacement,
+    _scale_placements,
     assign_label_positions,
     layout_and_route,
     route_fixed_nodes,
@@ -55,6 +58,7 @@ SCENE_BACKGROUND = QColor("#0f172a")
 TEXT_COLOR = QColor("#f8fafc")
 MUTED_TEXT = QColor("#cbd5e1")
 LABEL_BACKGROUND = QColor(15, 23, 42, 225)
+MAX_RASTER_EXPORT_DIMENSION = 4096
 
 
 class ZoomableGraphicsView(QGraphicsView):
@@ -75,6 +79,8 @@ class ZoomableGraphicsView(QGraphicsView):
         self.setBackgroundBrush(QBrush(SCENE_BACKGROUND))
         self.setFrameShape(QFrame.Shape.NoFrame)
         self._fit_pending = False
+        self._llm_payload: dict[str, Any] | None = None
+        self._llm_default_name = "agent_analysis"
 
     def wheelEvent(self, event):  # noqa: N802
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
@@ -87,7 +93,9 @@ class ZoomableGraphicsView(QGraphicsView):
         if not self.isVisible() or self.viewport().width() < 50:
             self._fit_pending = True
             return
-        bounds = self.scene().itemsBoundingRect().adjusted(-24, -24, 24, 24)
+        bounds = self.scene().sceneRect()
+        if bounds.isNull() or bounds.isEmpty():
+            bounds = self.scene().itemsBoundingRect().adjusted(-24, -24, 24, 24)
         self.fitInView(bounds, Qt.AspectRatioMode.KeepAspectRatio)
         self._fit_pending = False
 
@@ -107,7 +115,42 @@ class ZoomableGraphicsView(QGraphicsView):
         svg_action = QAction("Export SVG", self)
         svg_action.triggered.connect(lambda: self.export_dialog("svg"))
         menu.addAction(svg_action)
+        llm_action = QAction("Export for LLM", self)
+        llm_action.setEnabled(self._llm_payload is not None)
+        llm_action.triggered.connect(self.export_for_llm_dialog)
+        menu.addAction(llm_action)
         menu.exec(event.globalPos())
+
+    def set_llm_export_data(
+        self, payload: dict[str, Any] | None, *, default_name: str = "agent_analysis"
+    ) -> None:
+        self._llm_payload = payload
+        self._llm_default_name = default_name or "agent_analysis"
+
+    def export_for_llm_dialog(self) -> Path | None:
+        if self._llm_payload is None:
+            return None
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export for LLM",
+            str(Path.home() / f"{self._llm_default_name}.json"),
+            "Structured JSON (*.json)",
+        )
+        if not path:
+            return None
+        return self.export_llm_to(path)
+
+    def export_llm_to(self, path: str | Path) -> Path:
+        if self._llm_payload is None:
+            raise RuntimeError("There is no structured graph data to export.")
+        destination = Path(path)
+        if destination.suffix.lower() != ".json":
+            destination = destination.with_suffix(".json")
+        destination.write_text(
+            json.dumps(self._llm_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return destination
 
     def export_dialog(self, kind: str) -> Path | None:
         if self.scene() is None:
@@ -127,7 +170,9 @@ class ZoomableGraphicsView(QGraphicsView):
         if self.scene() is None:
             raise RuntimeError("There is no scene to export.")
         destination = Path(path)
-        rect = self.scene().itemsBoundingRect().adjusted(-36, -36, 36, 36)
+        rect = self.scene().sceneRect()
+        if rect.isNull() or rect.isEmpty():
+            rect = self.scene().itemsBoundingRect().adjusted(-36, -36, 36, 36)
         scene = self.scene()
         original_background = scene.backgroundBrush()
         scene.setBackgroundBrush(QBrush(Qt.BrushStyle.NoBrush))
@@ -144,11 +189,28 @@ class ZoomableGraphicsView(QGraphicsView):
             else:
                 if destination.suffix.lower() != ".png":
                     destination = destination.with_suffix(".png")
-                image = QImage(rect.size().toSize(), QImage.Format.Format_ARGB32)
+                longest_side = max(rect.width(), rect.height(), 1.0)
+                raster_scale = min(
+                    1.0,
+                    MAX_RASTER_EXPORT_DIMENSION / longest_side,
+                )
+                width = max(1, int(round(rect.width() * raster_scale)))
+                height = max(1, int(round(rect.height() * raster_scale)))
+                image = QImage(width, height, QImage.Format.Format_ARGB32)
+                if image.isNull():
+                    raise RuntimeError(
+                        "The PNG export buffer could not be allocated. "
+                        "Use SVG or Export for LLM for this graph."
+                    )
                 image.fill(Qt.GlobalColor.transparent)
                 painter = QPainter(image)
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                scene.render(painter, QRectF(image.rect()), rect)
+                painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+                scene.render(
+                    painter,
+                    QRectF(0.0, 0.0, float(width), float(height)),
+                    rect,
+                )
                 painter.end()
                 image.save(str(destination))
         finally:
@@ -156,11 +218,71 @@ class ZoomableGraphicsView(QGraphicsView):
         return destination
 
 
+def _translate_layout_below(geometry: Any, minimum_y: float) -> None:
+    """Move a complete routed layout below protected header/legend space."""
+    values = [placement.rect.top() for placement in geometry.placements.values()]
+    values.extend(
+        point.y()
+        for route in geometry.routes.values()
+        for point in route.points
+    )
+    values.extend(point.y() for point in geometry.group_headers.values())
+    if not values:
+        return
+    delta = minimum_y - min(values)
+    if delta <= 0.0:
+        return
+    for placement in geometry.placements.values():
+        placement.rect.translate(0.0, delta)
+    for route in geometry.routes.values():
+        route.points = [QPointF(point.x(), point.y() + delta) for point in route.points]
+        route.label_position = QPointF(
+            route.label_position.x(), route.label_position.y() + delta
+        )
+    geometry.group_headers = {
+        group: QPointF(point.x(), point.y() + delta)
+        for group, point in geometry.group_headers.items()
+    }
+    geometry.bounds.translate(0.0, delta)
+
+
+def _translate_rendered_layout_below(
+    geometry: Any,
+    routes: dict[str, Any],
+    minimum_y: float,
+) -> None:
+    values = [placement.rect.top() for placement in geometry.placements.values()]
+    values.extend(point.y() for route in routes.values() for point in route.points)
+    values.extend(point.y() for point in geometry.group_headers.values())
+    if not values:
+        return
+    delta = minimum_y - min(values)
+    if delta <= 0.0:
+        return
+    for placement in geometry.placements.values():
+        placement.rect.translate(0.0, delta)
+    for route in routes.values():
+        route.points = [QPointF(point.x(), point.y() + delta) for point in route.points]
+        route.label_position = QPointF(
+            route.label_position.x(), route.label_position.y() + delta
+        )
+    for route in geometry.routes.values():
+        route.points = [QPointF(point.x(), point.y() + delta) for point in route.points]
+        route.label_position = QPointF(
+            route.label_position.x(), route.label_position.y() + delta
+        )
+    geometry.group_headers = {
+        group: QPointF(point.x(), point.y() + delta)
+        for group, point in geometry.group_headers.items()
+    }
+    geometry.bounds.translate(0.0, delta)
+
+
 def build_state_transition_scene(analysis: AgentStaticAnalysis) -> QGraphicsScene:
     """Render the reachable control graph with compact placement and orthogonal routing."""
     scene = _new_scene()
     _add_scene_title(scene, f"State transitions — {analysis.agent_type}")
-    _add_legend(
+    legend_bounds = _add_legend(
         scene,
         [
             ("Initial", QColor("#1d4ed8"), "box"),
@@ -222,7 +344,17 @@ def build_state_transition_scene(analysis: AgentStaticAnalysis) -> QGraphicsScen
         layout_nodes,
         layout_edges,
         initial_node_id=analysis.initial_state_id,
-        offset=QPointF(42.0, 150.0),
+        offset=QPointF(42.0, legend_bounds.bottom() + 58.0),
+    )
+    _translate_layout_below(
+        geometry, legend_bounds.bottom() + 42.0
+    )
+    display_routes = separate_overlapping_routes(
+        geometry.routes.values(),
+        placements=geometry.placements,
+    )
+    _translate_rendered_layout_below(
+        geometry, display_routes, legend_bounds.bottom() + 42.0
     )
 
     header_font = QFont("Sans Serif", 10)
@@ -258,10 +390,6 @@ def build_state_transition_scene(analysis: AgentStaticAnalysis) -> QGraphicsScen
             border_width=2.6 if state.loop_member else 1.5,
         )
 
-    display_routes = separate_overlapping_routes(
-        geometry.routes.values(),
-        placements=geometry.placements,
-    )
     label_positions = assign_label_positions(
         display_routes.values(),
         [placement.rect for placement in geometry.placements.values()],
@@ -279,6 +407,7 @@ def build_state_transition_scene(analysis: AgentStaticAnalysis) -> QGraphicsScen
         counters[transition.kind] += 1
         prefix = "A" if transition.kind == "adapter" else "P"
         code_by_id[transition.transition_id] = f"{prefix}{counters[transition.kind]}"
+    scene._transition_codes = dict(code_by_id)
 
     details_by_kind: dict[str, list[tuple[str, str, QColor]]] = {
         "production": [],
@@ -422,6 +551,7 @@ def build_state_transition_scene(analysis: AgentStaticAnalysis) -> QGraphicsScen
             )
     return scene
 
+
 def build_interaction_scene(
     title: str,
     interactions: Iterable[MethodBufferInteraction],
@@ -429,7 +559,7 @@ def build_interaction_scene(
     """Render interactions as a matrix, eliminating ambiguous crossing edges."""
     scene = _new_scene()
     _add_scene_title(scene, title)
-    _add_legend(
+    legend_bounds = _add_legend(
         scene,
         [
             ("Read", QColor("#1d4ed8"), "box"),
@@ -450,8 +580,8 @@ def build_interaction_scene(
     actor_width = 330.0
     cell_width = 132.0
     row_height = 72.0
-    header_y = 126.0
-    body_y = 212.0
+    header_y = legend_bounds.bottom() + 44.0
+    body_y = header_y + 86.0
     left = 36.0
 
     actor_map: dict[str, list[MethodBufferInteraction]] = defaultdict(list)
@@ -688,21 +818,26 @@ def build_jump_progress_scene(
         active = index == progress and progress < len(path)
         base = QColor("#f0abfc") if transition.kind == "adapter" else QColor("#7dd3fc")
         color = QColor("#22c55e") if completed else base if active else QColor("#64748b")
+        points = [start, end]
+        halo = QPen(SCENE_BACKGROUND, 8.0)
+        halo.setCapStyle(Qt.PenCapStyle.RoundCap)
+        _add_polyline_path(scene, points, halo).setZValue(0.0)
         pen = QPen(color, 3.0 if completed or active else 2.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         if transition.kind == "adapter":
-            pen.setStyle(Qt.PenStyle.DashLine)
-        graph_path = QPainterPath(start)
-        graph_path.cubicTo(
-            QPointF((start.x() + end.x()) / 2, y + 18),
-            QPointF((start.x() + end.x()) / 2, y + node_height - 18),
-            end,
-        )
-        _add_path(scene, graph_path, pen)
-        _draw_arrow(scene, QPointF((start.x() + end.x()) / 2, y + node_height / 2), end, color)
+            pen.setStyle(Qt.PenStyle.CustomDashLine)
+            pen.setDashPattern([7.0, 4.0])
+        _add_polyline_path(scene, points, pen).setZValue(1.0)
+        _draw_arrow(scene, start, end, color)
         label = transition.label
         if transition.guard_label:
             label += "\n[" + transition.guard_label.replace("\n", "; ") + "]"
-        _add_edge_label(scene, label, QPointF(source_x + 18, y - 55), color)
+        _add_edge_label(
+            scene,
+            label,
+            QPointF(source_x + 18, y - 58 - (index % 2) * 34),
+            color,
+        )
 
     status = QGraphicsSimpleTextItem(
         "Target production fired."
@@ -724,7 +859,7 @@ def build_declarative_memory_scene(
     """Render memory contents and operations with obstacle-aware orthogonal routes."""
     scene = _new_scene()
     _add_scene_title(scene, title)
-    _add_legend(
+    legend_bounds = _add_legend(
         scene,
         [
             ("Memory", QColor("#1d4ed8"), "box"),
@@ -764,7 +899,7 @@ def build_declarative_memory_scene(
     node_specs: dict[str, tuple[str, QColor, int, QColor | None]] = {}
     edge_specs: list[tuple[LayoutEdge, QColor, Qt.PenStyle, str]] = []
 
-    top = 150.0
+    top = legend_bounds.bottom() + 120.0
     left_x = 36.0
     buffer_width = 320.0
     center_x = 520.0
@@ -930,16 +1065,54 @@ def build_declarative_memory_scene(
     routes = route_fixed_nodes(
         node_rects, [spec[0] for spec in edge_specs]
     )
+    fixed_placements = {
+        node_id: NodePlacement(
+            LayoutNode(node_id, node_id, "fixed", rect.width(), rect.height()),
+            rect,
+            0,
+            index,
+        )
+        for index, (node_id, rect) in enumerate(node_rects.items())
+    }
+    display_routes = separate_overlapping_routes(
+        routes.values(),
+        placements=fixed_placements,
+        preferred_lane_gap=22.0,
+        minimum_lane_gap=18.0,
+    )
     edge_render = {spec[0].edge_id: spec[1:] for spec in edge_specs}
-    for edge_id, route in routes.items():
+    label_font = QFont("Sans Serif", 9)
+    label_metrics = QFontMetrics(label_font)
+    label_sizes = {
+        edge_id: (
+            max(42.0, float(label_metrics.horizontalAdvance(str(values[2]))) + 18.0),
+            25.0,
+        )
+        for edge_id, values in edge_render.items()
+        if values[2]
+    }
+    label_positions = assign_label_positions(
+        display_routes.values(),
+        node_rects.values(),
+        label_width=42.0,
+        label_height=25.0,
+        label_sizes=label_sizes,
+    )
+    for edge_id, route in display_routes.items():
         color, style, label_text = edge_render[edge_id]
-        pen = QPen(color, 2.0)
+        halo = QPen(SCENE_BACKGROUND, 7.5)
+        halo.setCapStyle(Qt.PenCapStyle.RoundCap)
+        halo.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        _add_polyline_path(scene, route.points, halo).setZValue(0.0)
+        pen = QPen(color, 2.2)
         pen.setStyle(style)
-        _add_polyline_path(scene, route.points, pen)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        _add_polyline_path(scene, route.points, pen).setZValue(1.0)
         if len(route.points) >= 2:
             _draw_arrow(scene, route.points[-2], route.points[-1], color)
         if label_text:
-            _add_edge_label(scene, label_text, route.label_position, color)
+            _add_edge_label(scene, label_text, label_positions[edge_id], color)
     return scene
 
 def _ordered_transition_progress(
@@ -1002,19 +1175,34 @@ def _add_legend(
     *,
     y: float,
     max_width: float = 1050,
-) -> None:
+) -> QRectF:
+    """Render a protected legend panel and return its occupied bounds."""
     x = 24.0
     row = 0
+    placed: list[tuple[float, float, str, QColor, str]] = []
     for label_text, color, kind in items:
         estimated = 44 + len(label_text) * 7
         if x + estimated > max_width and x > 24:
             row += 1
             x = 24.0
         current_y = y + row * 34
+        placed.append((x, current_y, label_text, color, kind))
+        x += estimated
+
+    bounds = QRectF(14.0, y - 12.0, max_width + 4.0, (row + 1) * 34.0 + 18.0)
+    panel = QGraphicsRectItem(bounds)
+    panel.setPen(QPen(QColor("#334155"), 0.8))
+    panel.setBrush(QBrush(QColor(15, 23, 42, 248)))
+    panel.setZValue(40.0)
+    panel.setData(0, "legend-panel")
+    scene.addItem(panel)
+
+    for x, current_y, label_text, color, kind in placed:
         if kind == "box":
             swatch = QGraphicsRectItem(QRectF(x, current_y, 20, 20))
             swatch.setPen(QPen(QColor("#cbd5e1"), 1.0))
             swatch.setBrush(QBrush(color))
+            swatch.setZValue(41.0)
             scene.addItem(swatch)
         else:
             path = QPainterPath(QPointF(x, current_y + 10))
@@ -1022,12 +1210,14 @@ def _add_legend(
             pen = QPen(color, 2.2)
             if kind == "dash":
                 pen.setStyle(Qt.PenStyle.DashLine)
-            _add_path(scene, path, pen)
+            item = _add_path(scene, path, pen)
+            item.setZValue(41.0)
         label = QGraphicsSimpleTextItem(label_text)
         label.setBrush(QBrush(TEXT_COLOR))
         label.setPos(x + 32, current_y - 2)
+        label.setZValue(42.0)
         scene.addItem(label)
-        x += estimated
+    return bounds
 
 
 def _add_node(
@@ -1043,11 +1233,13 @@ def _add_node(
     node = QGraphicsRectItem(rect)
     node.setPen(QPen(border_color or QColor("#dbe4f0"), border_width))
     node.setBrush(QBrush(color))
+    node.setZValue(5.0)
     scene.addItem(node)
     text = QGraphicsTextItem(_wrap_label(label, wrap_width))
     text.setDefaultTextColor(TEXT_COLOR)
     text.setTextWidth(rect.width() - 18)
     text.setPos(rect.x() + 9, rect.y() + 8)
+    text.setZValue(6.0)
     scene.addItem(text)
     return node
 
@@ -1160,6 +1352,8 @@ def _add_edge_label(
     )
     background.setPen(QPen(QColor("#334155"), 0.8))
     background.setBrush(QBrush(LABEL_BACKGROUND))
+    background.setZValue(8.0)
+    label.setZValue(9.0)
     scene.addItem(background)
     scene.addItem(label)
     return label
@@ -1176,8 +1370,10 @@ def _draw_arrow(scene: QGraphicsScene, start: QPointF, end: QPointF, color: QCol
         math.cos(angle + math.pi / 6) * arrow_size,
         math.sin(angle + math.pi / 6) * arrow_size,
     )
-    scene.addLine(end.x(), end.y(), p1.x(), p1.y(), QPen(color, 2.0))
-    scene.addLine(end.x(), end.y(), p2.x(), p2.y(), QPen(color, 2.0))
+    first = scene.addLine(end.x(), end.y(), p1.x(), p1.y(), QPen(color, 2.0))
+    second = scene.addLine(end.x(), end.y(), p2.x(), p2.y(), QPen(color, 2.0))
+    first.setZValue(4.0)
+    second.setZValue(4.0)
 
 
 def _wrap_label(text: str, width: int) -> str:

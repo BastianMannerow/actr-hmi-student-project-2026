@@ -21,11 +21,7 @@ def create_environment(config: Any, agents: list[Any], simulation: Any) -> Envir
     else:
         environment = Environment(matrix, simulation=simulation)
     level_labels = {
-        "open_grid": "Open Grid",
-        "turtle_exercise_1": "Turtle Exercise 1",
-        "turtle_exercise_2": "Turtle Exercise 2",
-        "johannes_lab": "Johannes Lab",
-        "ros_shadow": "ROS Shadow Map",
+        "turtle_simulation": "Turtle Simulation",
     }
     environment.level_type = config.virtual_level
     environment.level_name = level_labels.get(config.virtual_level, config.virtual_level)

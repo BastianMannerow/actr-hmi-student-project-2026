@@ -593,7 +593,23 @@ def update_utility(agent_construct: Any, production_name: str, utility: float) -
     utility : float
         New utility value.
     """
-    agent_construct.actr_agent.productions[production_name]["utility"] = utility
+    model_production = agent_construct.actr_agent.productions[production_name]
+    model_production["utility"] = utility
+    try:
+        model_production.utility = utility
+    except AttributeError:
+        pass
+
+    simulation = getattr(agent_construct, "simulation", None)
+    production_rules = getattr(simulation, "_Simulation__pr", None)
+    runtime_rules = getattr(production_rules, "rules", None)
+    if runtime_rules is not None and production_name in runtime_rules:
+        runtime_production = runtime_rules[production_name]
+        runtime_production["utility"] = utility
+        try:
+            runtime_production.utility = utility
+        except AttributeError:
+            pass
 
 
 def get_production_utility(
@@ -617,8 +633,13 @@ def get_production_utility(
         entry does not exist.
     """
     try:
-        return agent_construct.actr_agent.productions[production_name]["utility"]
-    except KeyError:
+        simulation = getattr(agent_construct, "simulation", None)
+        production_rules = getattr(simulation, "_Simulation__pr", None)
+        runtime_rules = getattr(production_rules, "rules", None)
+        if runtime_rules is not None and production_name in runtime_rules:
+            return float(runtime_rules[production_name]["utility"])
+        return float(agent_construct.actr_agent.productions[production_name]["utility"])
+    except (KeyError, TypeError, ValueError):
         return None
 
 

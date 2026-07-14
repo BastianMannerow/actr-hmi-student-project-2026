@@ -20,11 +20,9 @@ ENVIRONMENT_MODES: tuple[tuple[str, str], ...] = (
 )
 
 VIRTUAL_LEVELS: tuple[tuple[str, str], ...] = (
-    ("Open Grid", "open_grid"),
-    ("Turtle Exercise 1", "turtle_exercise_1"),
-    ("Turtle Exercise 2", "turtle_exercise_2"),
-    ("Johannes Lab", "johannes_lab"),
+    ("Turtle Simulation", "turtle_simulation"),
 )
+
 
 
 @dataclass(slots=True)
@@ -107,13 +105,14 @@ class SimulationConfig:
     los: int = 3
     execution_mode: str = "single"
     environment_mode: str = "virtual"
-    virtual_level: str = "open_grid"
+    virtual_level: str = "turtle_simulation"
     ros: RosConfig = field(default_factory=RosConfig)
     human_agent_enabled: bool = False
     human_agent_name: str = "Human Player"
     agent_type_config: dict[str, AgentTypeConfig] = field(
         default_factory=lambda: {
-            "Example": AgentTypeConfig(count=1, print_agent_actions=True)
+            "CountingAgent": AgentTypeConfig(count=1, print_agent_actions=True),
+            "Squirtle": AgentTypeConfig(count=1, print_agent_actions=True),
         }
     )
 
@@ -206,13 +205,17 @@ class SimulationConfig:
             focus_position = (0, 2)
 
         raw_agents = payload.get("agent_type_config", {})
+        legacy_agent_names = {"Example", "Runner", "JohannesAgent"}
         agent_types = {
             str(name): AgentTypeConfig.from_dict(value)
             for name, value in raw_agents.items()
-            if isinstance(value, dict)
+            if isinstance(value, dict) and str(name) not in legacy_agent_names
         }
         if not agent_types:
-            agent_types = {"Example": AgentTypeConfig(count=1)}
+            agent_types = {
+                "CountingAgent": AgentTypeConfig(count=1),
+                "Squirtle": AgentTypeConfig(count=1),
+            }
 
         speed = float(payload.get("speed_factor", 100.0))
         if speed not in {value for _, value in SPEED_PRESETS}:
@@ -220,9 +223,9 @@ class SimulationConfig:
         mode = str(payload.get("environment_mode", "virtual"))
         if mode not in {value for _, value in ENVIRONMENT_MODES}:
             mode = "virtual"
-        level = str(payload.get("virtual_level", "open_grid"))
+        level = str(payload.get("virtual_level", "turtle_simulation"))
         if level not in {value for _, value in VIRTUAL_LEVELS}:
-            level = "open_grid"
+            level = "turtle_simulation"
 
         config = cls(
             focus_position=focus_position,

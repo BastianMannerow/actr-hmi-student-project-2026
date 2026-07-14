@@ -45,8 +45,114 @@ class DeclarativeMemorySnapshot:
 class DeclarativeMemoryInspector:
     """Read the authoritative ``ACTRModel.decmems`` structures."""
 
+    @staticmethod
+    def estimate_agent_size(agent: Any) -> tuple[int, int]:
+        """Return memory and chunk counts without serializing graph contents.
+
+        This preflight is intentionally cheap enough to run while Automatic is
+        active. It lets the GUI defer a graph that has already grown beyond a
+        safe real-time rendering budget before constructing inferred edges and
+        thousands of QGraphicsItems.
+        """
+        model = getattr(agent, "actr_agent", None)
+        decmems = getattr(model, "decmems", {}) if model is not None else {}
+        if not isinstance(decmems, Mapping):
+            return 0, 0
+        chunk_count = 0
+        for memory in decmems.values():
+            try:
+                chunk_count += len(memory)
+                continue
+            except Exception:
+                pass
+            try:
+                chunk_count += sum(1 for _ in memory.items())
+            except Exception:
+                pass
+        return len(decmems), chunk_count
+
+    @classmethod
+    def estimate_agent_graph_complexity(
+        cls,
+        agent: Any,
+        *,
+        detailed_chunk_limit: int = 180,
+    ) -> tuple[int, int, int]:
+        """Estimate runtime graph size without constructing pairwise edges.
+
+        Shared slot values can produce a quadratic number of graph edges. This
+        method counts occurrences per scalar value and calculates the resulting
+        pair count arithmetically, keeping the preflight linear in the number of
+        chunks and slots.
+        """
+        memory_count, chunk_count = cls.estimate_agent_size(agent)
+        if chunk_count == 0 or chunk_count > detailed_chunk_limit:
+            return memory_count, chunk_count, 0
+
+        model = getattr(agent, "actr_agent", None)
+        decmems = getattr(model, "decmems", {}) if model is not None else {}
+        if not isinstance(decmems, Mapping):
+            return 0, 0, 0
+
+        value_counts: dict[str, int] = {}
+        for memory in decmems.values():
+            try:
+                items = memory.items()
+            except Exception:
+                continue
+            for chunk, _traces in items:
+                serialized = BufferHistoryRecorder.serialize_chunk(chunk)
+                values_in_chunk: set[str] = set()
+                for raw_value in serialized.get("slots", {}).values():
+                    value = cls._scalar(raw_value)
+                    if value and len(value) > 1:
+                        values_in_chunk.add(value.casefold())
+                for value in values_in_chunk:
+                    value_counts[value] = value_counts.get(value, 0) + 1
+
+        estimated_shared_edges = sum(
+            count * (count - 1) // 2
+            for count in value_counts.values()
+            if count > 1
+        )
+        return memory_count, chunk_count, estimated_shared_edges
+
     @classmethod
     def inspect_agent(cls, agent: Any) -> DeclarativeMemorySnapshot:
+        """Inspect the complete memory graph.
+
+        Runtime GUI code calls this only after a cheap complexity preflight.
+        Large memories use :meth:`inspect_agent_window` instead so the Qt scene
+        remains bounded.
+        """
+        return cls._inspect_agent(agent)
+
+    @classmethod
+    def inspect_agent_window(
+        cls,
+        agent: Any,
+        *,
+        chunk_offset: int,
+        chunk_limit: int,
+        max_edges: int = 240,
+    ) -> DeclarativeMemorySnapshot:
+        """Inspect one bounded chunk window without materializing all chunks."""
+        return cls._inspect_agent(
+            agent,
+            chunk_offset=max(0, int(chunk_offset)),
+            chunk_limit=max(1, int(chunk_limit)),
+            max_edges=max(0, int(max_edges)),
+        )
+
+    @classmethod
+    def _inspect_agent(
+        cls,
+        agent: Any,
+        *,
+        chunk_offset: int = 0,
+        chunk_limit: int | None = None,
+        max_edges: int | None = None,
+    ) -> DeclarativeMemorySnapshot:
         model = getattr(agent, "actr_agent", None)
         decmems = getattr(model, "decmems", {}) if model is not None else {}
         if not isinstance(decmems, Mapping):
@@ -54,17 +160,28 @@ class DeclarativeMemoryInspector:
 
         chunks: list[MemoryChunk] = []
         memories: list[str] = []
+        global_index = 0
+        stop_at = (
+            chunk_offset + chunk_limit
+            if chunk_limit is not None
+            else None
+        )
         for memory_name, memory in sorted(
             decmems.items(), key=lambda item: str(item[0]).lower()
         ):
             name = str(memory_name)
             memories.append(name)
             try:
-                items = list(memory.items())
+                items = memory.items()
             except Exception:
-                items = []
+                items = ()
             activations = getattr(memory, "activations", {})
-            for index, (chunk, traces) in enumerate(items, start=1):
+            for memory_index, (chunk, traces) in enumerate(items, start=1):
+                if global_index < chunk_offset:
+                    global_index += 1
+                    continue
+                if stop_at is not None and global_index >= stop_at:
+                    break
                 serialized = BufferHistoryRecorder.serialize_chunk(chunk)
                 trace_values = cls._trace_values(traces)
                 activation = None
@@ -75,16 +192,20 @@ class DeclarativeMemoryInspector:
                     activation = None
                 chunks.append(
                     MemoryChunk(
-                        chunk_id=f"{name}:{index}",
+                        chunk_id=f"{name}:{memory_index}",
                         memory_name=name,
                         chunk_type=str(serialized.get("type", "chunk")),
-                        label=cls._chunk_label(serialized, index),
+                        label=cls._chunk_label(serialized, memory_index),
                         slots=dict(serialized.get("slots", {})),
                         traces=trace_values,
                         activation=activation,
                         source="runtime",
                     )
                 )
+                global_index += 1
+            if stop_at is not None and global_index >= stop_at:
+                break
+
         operations: list[dict[str, Any]] = []
         memory_by_identity = {
             id(memory): str(name) for name, memory in decmems.items()
@@ -106,10 +227,13 @@ class DeclarativeMemoryInspector:
                             "detail": type(buffer).__name__,
                         }
                     )
+        edges = cls.infer_edges(chunks)
+        if max_edges is not None and len(edges) > max_edges:
+            edges = edges[:max_edges]
         return DeclarativeMemorySnapshot(
             memories=memories,
             chunks=chunks,
-            edges=cls.infer_edges(chunks),
+            edges=edges,
             operations=operations,
         )
 
@@ -197,7 +321,20 @@ class DeclarativeMemoryInspector:
     @staticmethod
     def _aliases(chunk: MemoryChunk) -> set[str]:
         aliases = {chunk.chunk_id, chunk.label.splitlines()[0]}
-        for key in ("name", "id", "key", "state", "value"):
+        identity_slots = (
+            "name",
+            "id",
+            "key",
+            "state",
+            "value",
+            "entity_id",
+            "relation_id",
+            "strategy_id",
+            "cell_id",
+            "target_id",
+            "episode_id",
+        )
+        for key in identity_slots:
             value = chunk.slots.get(key)
             scalar = DeclarativeMemoryInspector._scalar(value)
             if scalar:

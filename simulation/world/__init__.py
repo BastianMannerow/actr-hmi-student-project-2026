@@ -1,22 +1,20 @@
 from simulation.world.entities import (
-    DefinitelyAWall,
-    FakeWall,
+    BurningBush,
+    BurningTree,
+    FireTarget,
     SpatialAgent,
     SpatialEntity,
-    Target,
-    Wall,
 )
 from simulation.world.environment import Environment, RosEnvironment
 from simulation.world.factory import create_environment
 
 __all__ = [
-    "DefinitelyAWall",
+    "BurningBush",
+    "BurningTree",
     "Environment",
-    "FakeWall",
+    "FireTarget",
     "RosEnvironment",
     "SpatialAgent",
     "SpatialEntity",
-    "Target",
-    "Wall",
     "create_environment",
 ]

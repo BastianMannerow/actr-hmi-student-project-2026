@@ -119,9 +119,8 @@ class GridCanvas(QWidget):
             terrain,
             key=lambda value: (
                 0 if bool(getattr(value, "is_target", False)) else
-                1 if type(value).__name__ == "DefinitelyAWall" else
-                2 if type(value).__name__ == "Wall" else
-                3 if type(value).__name__ == "FakeWall" else 4
+                1 if type(value).__name__ == "BurningTree" else
+                2 if type(value).__name__ == "BurningBush" else 3
             ),
         )[0]
         name = type(item).__name__
@@ -134,26 +133,19 @@ class GridCanvas(QWidget):
             painter.drawEllipse(center, radius, radius)
             painter.setBrush(QColor("#dcfce7"))
             painter.drawEllipse(center, radius * 0.45, radius * 0.45)
-            label = "T"
-        elif name == "DefinitelyAWall":
-            painter.fillRect(rect.adjusted(2, 2, -2, -2), QColor("#475569"))
-            painter.setPen(QPen(QColor("#cbd5e1"), 1.2))
-            painter.drawLine(rect.topLeft() + QPointF(4, 4), rect.bottomRight() - QPointF(4, 4))
-            painter.drawLine(rect.topRight() + QPointF(-4, 4), rect.bottomLeft() + QPointF(4, -4))
-            label = "X"
-        elif name == "Wall":
+            label = "F"
+        elif name == "BurningTree":
             inner = rect.adjusted(2, 2, -2, -2)
             painter.fillRect(inner, QColor("#7f1d1d"))
-            painter.setPen(QPen(QColor("#fca5a5"), 1.0))
-            for fraction in (0.33, 0.66):
-                y = inner.top() + inner.height() * fraction
-                painter.drawLine(QPointF(inner.left(), y), QPointF(inner.right(), y))
-            label = "W"
-        elif name == "FakeWall":
-            painter.fillRect(rect.adjusted(3, 3, -3, -3), QColor("#854d0e"))
-            painter.setPen(QPen(QColor("#fde68a"), 1.4, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(QColor("#fca5a5"), 1.1))
+            painter.drawLine(inner.topLeft() + QPointF(3, 3), inner.bottomRight() - QPointF(3, 3))
+            painter.drawLine(inner.topRight() + QPointF(-3, 3), inner.bottomLeft() + QPointF(3, -3))
+            label = "X"
+        elif name == "BurningBush":
+            painter.fillRect(rect.adjusted(3, 3, -3, -3), QColor("#9a3412"))
+            painter.setPen(QPen(QColor("#fdba74"), 1.4, Qt.PenStyle.DashLine))
             painter.drawRect(rect.adjusted(4, 4, -4, -4))
-            label = "P"
+            label = "B"
         else:
             painter.fillRect(rect.adjusted(3, 3, -3, -3), QColor("#334155"))
             label = str(getattr(item, "symbol", "?"))[:2]

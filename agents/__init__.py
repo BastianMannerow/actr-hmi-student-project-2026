@@ -1,1 +1,1 @@
-"""Example ACT-R agent definitions and adapters."""
+"""ACT-R agent plug-ins for the Turtle Simulation."""

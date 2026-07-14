@@ -72,6 +72,8 @@ class Middleman:
             ["-" for _ in range(window_width)]
             for _ in range(window_height)
         ]
+        frame_origin = (row - offset_y, column - offset_x)
+        valid_positions: set[tuple[int, int]] = set()
 
         for view_row in range(window_height):
             for view_column in range(window_width):
@@ -79,6 +81,7 @@ class Middleman:
                 matrix_column = column - offset_x + view_column
                 if not (0 <= matrix_row < rows and 0 <= matrix_column < columns):
                     continue
+                valid_positions.add((matrix_row, matrix_column))
                 cell = matrix[matrix_row][matrix_column]
                 if not cell:
                     continue
@@ -122,6 +125,8 @@ class Middleman:
 
         agent.visual_stimuli = visual_stimuli
         agent.visual_metadata = metadata
+        agent.visual_frame_origin = frame_origin
+        agent.visual_frame_valid_positions = valid_positions
 
         # One frame must have exactly one trigger collection. Returning a list
         # of individual strings would make pyactr duplicate the same frame once

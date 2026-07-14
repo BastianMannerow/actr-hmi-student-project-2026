@@ -1,9 +1,11 @@
-"""Spatial entities used by virtual and ROS-backed TurtleBot worlds."""
+"""Spatial entities for the firefighter TurtleBot simulation."""
 
 from __future__ import annotations
 
 
 class SpatialEntity:
+    """Base class for every object that can occupy a grid cell."""
+
     display_name = "Entity"
     symbol = "?"
     blocks_movement = False
@@ -14,6 +16,8 @@ class SpatialEntity:
 
 
 class SpatialAgent(SpatialEntity):
+    """Base class for ACT-R and human-controlled agents."""
+
     is_human_controlled = False
     symbol = "A"
 
@@ -29,26 +33,46 @@ class SpatialAgent(SpatialEntity):
         return f"{type(self).__name__}(name={self.name!r})"
 
 
-class Wall(SpatialEntity):
-    display_name = "Wall"
-    symbol = "Z"
-    blocks_movement = True
+class BurningTree(SpatialEntity):
+    """A burning tree: known terrain that can never be crossed."""
 
-
-class FakeWall(SpatialEntity):
-    display_name = "Passable obstacle"
-    symbol = "Z"
-    blocks_movement = False
-
-
-class DefinitelyAWall(SpatialEntity):
-    display_name = "Known wall"
+    display_name = "Burning tree"
     symbol = "X"
     blocks_movement = True
 
 
-class Target(SpatialEntity):
-    display_name = "Target"
-    symbol = "T"
+class BurningBush(SpatialEntity):
+    """A burning bush whose traversability is initially unknown to the agent.
+
+    The GUI and visual stimulus expose only the common ``B`` symbol. The actual
+    passability is intentionally an environment property and is not leaked into
+    the agent's visual frame.
+    """
+
+    display_name = "Burning bush (unknown passability)"
+    symbol = "b"
+    is_uncertain = True
+
+    def __init__(self, *, passable: bool) -> None:
+        self.passable = bool(passable)
+        self.blocks_movement = not self.passable
+
+    def __repr__(self) -> str:
+        return "BurningBush(passable=<hidden>)"
+
+
+class FireTarget(SpatialEntity):
+    """One of the three fire/rescue locations Squirtle must visit."""
+
+    display_name = "Fire target"
+    symbol = "F"
     blocks_movement = False
     is_target = True
+
+
+# Compatibility aliases for older exports and generic inspection code. New
+# level construction and GUI rendering use the firefighter-specific names.
+Wall = BurningTree
+DefinitelyAWall = BurningTree
+FakeWall = BurningBush
+Target = FireTarget
