@@ -13,7 +13,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSplitter,
     QTabWidget,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -25,6 +24,7 @@ from gui.analysis_graphs import (
     build_interaction_scene,
     build_state_transition_scene,
 )
+from gui.transition_detail_dialog import TransitionDetailDialog
 from gui.llm_export import (
     declarative_memory_payload,
     interaction_payload,
@@ -91,6 +91,9 @@ class AgentAnalysisView(QFrame):
             self._build_declarative_memory_tab(), "Declarative Memory"
         )
         self.tabs.currentChanged.connect(self._tab_changed)
+        self.state_graph_view.set_item_activation_handler(
+            self._open_transition_explanation
+        )
         details_layout.addWidget(self.tabs, 1)
 
         splitter.addWidget(self.agent_tree)
@@ -137,8 +140,7 @@ class AgentAnalysisView(QFrame):
         self,
         *,
         prefix: str,
-        findings: bool = False,
-    ) -> tuple[QWidget, ZoomableGraphicsView, QTextEdit | None]:
+    ) -> tuple[QWidget, ZoomableGraphicsView]:
         page = QWidget(self)
         layout = QVBoxLayout(page)
         toolbar = QHBoxLayout()
@@ -158,21 +160,15 @@ class AgentAnalysisView(QFrame):
         llm.clicked.connect(view.export_for_llm_dialog)
         fit.clicked.connect(view.reset_zoom)
         layout.addWidget(view, 1)
-        findings_widget = None
-        if findings:
-            findings_widget = QTextEdit(page)
-            findings_widget.setReadOnly(True)
-            findings_widget.setMaximumHeight(135)
-            layout.addWidget(findings_widget)
         setattr(self, f"{prefix}_png", png)
         setattr(self, f"{prefix}_svg", svg)
         setattr(self, f"{prefix}_llm", llm)
         setattr(self, f"{prefix}_fit", fit)
-        return page, view, findings_widget
+        return page, view
 
     def _build_state_graph_tab(self) -> QWidget:
-        page, self.state_graph_view, self.state_findings = self._build_graph_page(
-            prefix="state_graph", findings=True
+        page, self.state_graph_view = self._build_graph_page(
+            prefix="state_graph"
         )
         return page
 
@@ -181,14 +177,14 @@ class AgentAnalysisView(QFrame):
         layout = QVBoxLayout(page)
         self.interaction_tabs = QTabWidget(page)
 
-        production_page, self.production_graph_view, _ = self._build_graph_page(
+        production_page, self.production_graph_view = self._build_graph_page(
             prefix="production"
         )
         self.interaction_tabs.addTab(
             production_page, "Productions → Buffers"
         )
 
-        adapter_page, self.adapter_graph_view, _ = self._build_graph_page(
+        adapter_page, self.adapter_graph_view = self._build_graph_page(
             prefix="adapter"
         )
         self.interaction_tabs.addTab(
@@ -199,7 +195,7 @@ class AgentAnalysisView(QFrame):
         return page
 
     def _build_declarative_memory_tab(self) -> QWidget:
-        page, self.memory_graph_view, _ = self._build_graph_page(prefix="memory")
+        page, self.memory_graph_view = self._build_graph_page(prefix="memory")
         return page
 
     def refresh(self, *, force: bool = False) -> None:
@@ -356,19 +352,47 @@ class AgentAnalysisView(QFrame):
                 default_name=f"{agent_type}_{view_key}",
             )
             view.reset_zoom()
-            if view_key == "state":
-                self.state_findings.setPlainText(
-                    self._findings_text(analysis)
-                )
             self._rendered_tabs.add(cache_key)
 
         if self.task_manager is None:
             try:
                 apply(job(lambda _value, _stage=None: None))
-            except Exception:
-                return
+            except Exception as exc:
+                self._show_render_error(view_key, f"{type(exc).__name__}: {exc}")
         else:
-            self.task_manager.submit(task_id, title, job, apply)
+            self.task_manager.submit(
+                task_id,
+                title,
+                job,
+                apply,
+                on_error=lambda message: self._show_render_error(view_key, message),
+            )
+
+    def _open_transition_explanation(self, payload: dict[str, Any]) -> None:
+        if payload.get("payload_type") not in {
+            "state_transition_bundle",
+            "state_transition_explanation",
+        }:
+            return
+        dialog = TransitionDetailDialog(payload, self)
+        dialog.exec()
+
+    def _show_render_error(self, view_key: str, message: str) -> None:
+        view = self._view_for_key(view_key)
+        from PyQt6.QtGui import QBrush, QColor
+        from PyQt6.QtWidgets import QGraphicsScene, QGraphicsTextItem
+
+        scene = QGraphicsScene()
+        scene.setBackgroundBrush(QBrush(QColor("#0f172a")))
+        item = QGraphicsTextItem(
+            "The graph could not be generated.\n\n" + str(message)
+        )
+        item.setDefaultTextColor(QColor("#fecaca"))
+        item.setTextWidth(900.0)
+        item.setPos(30.0, 30.0)
+        scene.addItem(item)
+        scene.setSceneRect(scene.itemsBoundingRect().adjusted(-24, -24, 24, 24))
+        view.setScene(scene)
 
     def _view_for_key(self, view_key: str) -> ZoomableGraphicsView:
         return {
@@ -400,34 +424,3 @@ class AgentAnalysisView(QFrame):
             "declarative-memory": "Declarative Memory Graph",
         }
         return f"{names[view_key]} · {agent_type}"
-
-    @staticmethod
-    def _findings_text(analysis: AgentStaticAnalysis) -> str:
-        initial = analysis.states.get(analysis.initial_state_id)
-        findings = [
-            f"Initial control state: {initial.label if initial else analysis.initial_state_label}",
-            f"Expanded productions: {len(analysis.productions)}",
-            f"Reachable productions: {sum(1 for item in analysis.productions if item.reachable)}",
-            "Unreachable productions: "
-            + (
-                ", ".join(analysis.unreachable_productions)
-                if analysis.unreachable_productions
-                else "none"
-            ),
-            "Dead-end states: "
-            + (
-                ", ".join(analysis.dead_end_states)
-                if analysis.dead_end_states
-                else "none"
-            ),
-            "Terminal states: "
-            + (
-                ", ".join(analysis.terminal_states)
-                if analysis.terminal_states
-                else "none"
-            ),
-            f"States participating in loops: {len(analysis.loop_states)}",
-        ]
-        if analysis.analysis_warnings:
-            findings.extend(["", *analysis.analysis_warnings])
-        return "\n".join(findings)

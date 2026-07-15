@@ -205,14 +205,16 @@ class StepLogView(QFrame):
         selector = QHBoxLayout()
         selector.addWidget(QLabel("Buffer:"))
         self.buffer_selector = QComboBox(page)
-        self.buffer_selector.setEditable(True)
+        self.buffer_selector.setEditable(False)
         self.buffer_selector.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.buffer_selector.setMaxVisibleItems(18)
         self.buffer_selector.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.buffer_selector.setMinimumContentsLength(24)
-        self.buffer_selector.currentTextChanged.connect(self._buffer_changed)
+        self.buffer_selector.currentIndexChanged.connect(
+            lambda _index: self._buffer_changed(self.buffer_selector.currentText())
+        )
         selector.addWidget(self.buffer_selector, 1)
         selector.addStretch(1)
         layout.addLayout(selector)

@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-import hashlib
 from typing import Any
 
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import QSizePolicy, QToolTip, QWidget
+
+from gui.environment_symbols import (
+    draw_environment_symbol,
+    symbol_for_agent,
+    symbol_for_terrain,
+)
 
 
 class GridCanvas(QWidget):
@@ -112,7 +117,6 @@ class GridCanvas(QWidget):
     ) -> None:
         if not terrain:
             return
-        painter.save()
         # A cell can contain more than one terrain marker. Render the most
         # semantically important one instead of relying on insertion order.
         item = sorted(
@@ -123,41 +127,12 @@ class GridCanvas(QWidget):
                 2 if type(value).__name__ == "BurningBush" else 3
             ),
         )[0]
-        name = type(item).__name__
-        label = ""
-        if bool(getattr(item, "is_target", False)):
-            painter.setBrush(QColor("#16a34a"))
-            painter.setPen(QPen(QColor("#bbf7d0"), 1.5))
-            center = rect.center()
-            radius = min(rect.width(), rect.height()) * 0.34
-            painter.drawEllipse(center, radius, radius)
-            painter.setBrush(QColor("#dcfce7"))
-            painter.drawEllipse(center, radius * 0.45, radius * 0.45)
-            label = "F"
-        elif name == "BurningTree":
-            inner = rect.adjusted(2, 2, -2, -2)
-            painter.fillRect(inner, QColor("#7f1d1d"))
-            painter.setPen(QPen(QColor("#fca5a5"), 1.1))
-            painter.drawLine(inner.topLeft() + QPointF(3, 3), inner.bottomRight() - QPointF(3, 3))
-            painter.drawLine(inner.topRight() + QPointF(-3, 3), inner.bottomLeft() + QPointF(3, -3))
-            label = "X"
-        elif name == "BurningBush":
-            painter.fillRect(rect.adjusted(3, 3, -3, -3), QColor("#9a3412"))
-            painter.setPen(QPen(QColor("#fdba74"), 1.4, Qt.PenStyle.DashLine))
-            painter.drawRect(rect.adjusted(4, 4, -4, -4))
-            label = "B"
-        else:
-            painter.fillRect(rect.adjusted(3, 3, -3, -3), QColor("#334155"))
-            label = str(getattr(item, "symbol", "?"))[:2]
-
-        if label and rect.width() >= 24 and rect.height() >= 24:
-            font = QFont(self.font())
-            font.setBold(True)
-            font.setPointSizeF(max(6.0, min(10.0, rect.width() * 0.22)))
-            painter.setFont(font)
-            painter.setPen(QColor("#f8fafc"))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
-        painter.restore()
+        draw_environment_symbol(
+            painter,
+            rect,
+            symbol_for_terrain(item),
+            label=str(getattr(item, "symbol", "?"))[:2].upper(),
+        )
 
     def _draw_occupants(
         self,
@@ -188,39 +163,18 @@ class GridCanvas(QWidget):
                 rect.left() + rect.width() * ox,
                 rect.top() + rect.height() * oy,
             )
-            color = (
-                QColor("#f59e0b")
-                if bool(getattr(occupant, "is_human_controlled", False))
-                else self._agent_color(name)
+            label = name if rect.width() >= 75 else name[:3]
+            draw_environment_symbol(
+                painter,
+                QRectF(
+                    center.x() - radius,
+                    center.y() - radius,
+                    radius * 2,
+                    radius * 2,
+                ),
+                symbol_for_agent(occupant),
+                label=label,
             )
-            painter.setBrush(color)
-            painter.setPen(
-                QPen(
-                    QColor("#f1f4f8"),
-                    max(1.0, rect.width() * 0.025),
-                )
-            )
-            painter.drawEllipse(center, radius, radius)
-
-            if rect.width() >= 28:
-                label = name if rect.width() >= 75 else name[:3]
-                font = QFont(self.font())
-                font.setBold(True)
-                font.setPointSizeF(
-                    max(6.0, min(10.0, radius * 0.42))
-                )
-                painter.setFont(font)
-                painter.setPen(QColor("#081018"))
-                painter.drawText(
-                    QRectF(
-                        center.x() - radius,
-                        center.y() - radius,
-                        radius * 2,
-                        radius * 2,
-                    ),
-                    Qt.AlignmentFlag.AlignCenter,
-                    label,
-                )
 
         if len(occupants) > len(visible):
             painter.setPen(QColor("#d9e0ea"))
@@ -231,12 +185,6 @@ class GridCanvas(QWidget):
                 f"+{len(occupants) - len(visible)}",
             )
         painter.restore()
-
-    @staticmethod
-    def _agent_color(name: str) -> QColor:
-        digest = hashlib.sha256(name.encode("utf-8")).digest()
-        hue = int.from_bytes(digest[:2], "big") % 360
-        return QColor.fromHsl(hue, 145, 178)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         matrix = getattr(self.environment, "level_matrix", None)

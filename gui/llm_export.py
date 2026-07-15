@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from simulation.inspection.declarative_memory import DeclarativeMemorySnapshot
+from gui.graphing.transition_explainability import transition_explanation
+
+from simulation.inspection.declarative_memory import (
+    DeclarativeMemoryInspector,
+    DeclarativeMemorySnapshot,
+)
 from simulation.inspection.source_analysis import (
     AgentStaticAnalysis,
     MethodBufferInteraction,
@@ -41,18 +46,28 @@ def state_graph_payload(
         }
         for state in analysis.states.values()
     ]
-    edges = [
-        {
+    edges = []
+    for transition in analysis.transitions:
+        code = codes.get(transition.transition_id)
+        record = {
             "id": transition.transition_id,
             "source": transition.source_state_id,
             "target": transition.target_state_id,
             "edge_type": transition.kind,
-            **_transition_record(
-                transition, codes.get(transition.transition_id)
-            ),
+            **_transition_record(transition, code),
         }
-        for transition in analysis.transitions
-    ]
+        if code is not None:
+            explanation = transition_explanation(analysis, transition, code)
+            record["module_accesses"] = [
+                {
+                    "module": item.module,
+                    "buffer": item.buffer,
+                    "modes": list(item.modes),
+                }
+                for item in explanation.modules
+            ]
+            record["explainable_summary"] = explanation.summary
+        edges.append(record)
     return {
         "format": "actr-graph-v1",
         "graph_type": "state_graph",
@@ -103,10 +118,14 @@ def declarative_memory_payload(
     *,
     title: str,
 ) -> dict[str, Any]:
+    snapshot = DeclarativeMemoryInspector.normalize_snapshot(snapshot)
     return {
         "format": "actr-graph-v1",
         "graph_type": "declarative_memory",
         "title": title,
+        "scope": snapshot.scope,
+        "retrieval_buffers": list(snapshot.retrieval_buffers),
+        "retrieval_memory_names": list(snapshot.retrieval_memory_names),
         "memories": [
             {"id": f"memory:{name}", "name": name}
             for name in snapshot.memories
@@ -115,8 +134,11 @@ def declarative_memory_payload(
             {
                 "id": chunk.chunk_id,
                 "memory_name": chunk.memory_name,
+                "chunk_type": chunk.chunk_type,
                 "label": chunk.label,
                 "slots": _json_value(chunk.slots),
+                "retrieval_buffers": list(chunk.retrieval_buffers),
+                "matched_retrieval_queries": list(chunk.matched_queries),
                 "source": chunk.source,
                 "traces": list(chunk.traces),
                 "activation": chunk.activation,
@@ -131,6 +153,16 @@ def declarative_memory_payload(
                 "relation": edge.relation,
             }
             for edge in snapshot.edges
+        ],
+        "retrieval_queries": [
+            {
+                "id": query.query_id,
+                "production_name": query.production_name,
+                "buffer_name": query.buffer_name,
+                "chunk_type": query.chunk_type,
+                "constraints": _json_value(query.constraints),
+            }
+            for query in snapshot.retrieval_queries
         ],
         "operations": [_json_value(item) for item in snapshot.operations],
     }

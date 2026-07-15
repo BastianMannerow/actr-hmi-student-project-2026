@@ -1,27 +1,9 @@
-from simulation.integrations import pyactr_extension
-import pyactr as actr
+"""Optional no-op adapter for the production-only counting model."""
 
-class ExampleAdapter:
-    """
-    A basic agent, which serves as a demonstrator.
 
-    Attributes:
-        agent_construct (str): Nothing
-    """
+class CountingAgentAdapter:
+    def __init__(self, _environment=None) -> None:
+        self.agent_construct = None
 
-    def __init__(self, agent_construct):
-        """
-        Args:
-            agent_construct: nothing at the moment
-        """
-        self.agent_construct = agent_construct
-
-    # Extending ACT-R
-    def extending_actr(self):
-        """
-        Functionality, which extends ACT-R
-        In pyactr, ACT-R functionality and regular arithmetic or logical functions are strictly divided.
-        The reason for that is a clearer understanding of the agents' behaviour.
-        This method will supervise the internal state of the agent.
-        """
-        pass
+    def extending_actr(self) -> None:
+        return None

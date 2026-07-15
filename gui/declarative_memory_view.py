@@ -37,20 +37,11 @@ class DeclarativeMemoryInspectorTab(QWidget):
     PAUSED_FULL_COMPLEXITY_LIMIT = 1_500
     PAUSED_PAGE_SIZE = 100
     PAUSED_PAGE_EDGE_LIMIT = 240
-    PAUSED_HARD_CHUNK_LIMIT = 5_000
 
     LIVE_WARNING = (
         "Live declarative-memory rendering has been paused because the graph "
         "complexity exceeds real-time GUI performance. Pause the simulation "
         "to load the current graph."
-    )
-    PAGED_WARNING = (
-        "The complete declarative-memory graph exceeds the interactive scene "
-        "budget. A bounded page is shown to keep the GUI responsive."
-    )
-    HARD_LIMIT_WARNING = (
-        "The declarative-memory graph is too large for an interactive view. "
-        "The simulation data remains available in the complete history export."
     )
 
     def __init__(self, parent=None, *, task_manager=None) -> None:
@@ -77,9 +68,6 @@ class DeclarativeMemoryInspectorTab(QWidget):
         toolbar = QHBoxLayout()
         self.info_label = QLabel("No runtime agent selected")
         self.info_label.setObjectName("muted")
-        self.previous_button = QPushButton("Previous")
-        self.next_button = QPushButton("Next")
-        self.latest_button = QPushButton("Latest")
         self.page_label = QLabel("")
         self.page_label.setObjectName("muted")
         fit_button = QPushButton("Fit View")
@@ -88,9 +76,6 @@ class DeclarativeMemoryInspectorTab(QWidget):
         llm_button = QPushButton("Export for LLM")
         toolbar.addWidget(self.info_label)
         toolbar.addStretch(1)
-        toolbar.addWidget(self.previous_button)
-        toolbar.addWidget(self.next_button)
-        toolbar.addWidget(self.latest_button)
         toolbar.addWidget(self.page_label)
         toolbar.addWidget(fit_button)
         toolbar.addWidget(png_button)
@@ -114,9 +99,6 @@ class DeclarativeMemoryInspectorTab(QWidget):
         png_button.clicked.connect(lambda: self.graph.export_dialog("png"))
         svg_button.clicked.connect(lambda: self.graph.export_dialog("svg"))
         llm_button.clicked.connect(self.graph.export_for_llm_dialog)
-        self.previous_button.clicked.connect(self._show_previous_page)
-        self.next_button.clicked.connect(self._show_next_page)
-        self.latest_button.clicked.connect(self._show_latest_page)
         self._update_page_controls()
 
     @property
@@ -209,9 +191,6 @@ class DeclarativeMemoryInspectorTab(QWidget):
             )
             self._total_chunk_count = chunk_count
             estimated_complexity = chunk_count + estimated_edges
-            if chunk_count > self.PAUSED_HARD_CHUNK_LIMIT:
-                self._show_hard_limit_summary(agent_name, chunk_count)
-                return
             self._paged_mode = (
                 chunk_count > self.PAUSED_FULL_CHUNK_LIMIT
                 or estimated_complexity > self.PAUSED_FULL_COMPLEXITY_LIMIT
@@ -241,8 +220,6 @@ class DeclarativeMemoryInspectorTab(QWidget):
                     start,
                     min(chunk_count, start + self.PAUSED_PAGE_SIZE),
                 )
-                self.live_notice_label.setText(self.PAGED_WARNING)
-                self.live_notice_label.show()
             else:
                 self._page_start = 0
                 snapshot_factory = lambda: DeclarativeMemoryInspector.inspect_agent(
@@ -345,8 +322,8 @@ class DeclarativeMemoryInspectorTab(QWidget):
                 else ""
             )
             self.info_label.setText(
-                f"{agent_name} · {len(snapshot.memories)} memories · "
-                f"{chunk_count:,} chunks{suffix} · "
+                f"{agent_name} · {len(snapshot.memories)} retrieval-linked memories · "
+                f"{chunk_count:,} query-matching chunks{suffix} · "
                 f"{render_seconds * 1000:.0f} ms"
             )
             if result["automatic_running"]:
@@ -366,32 +343,6 @@ class DeclarativeMemoryInspectorTab(QWidget):
                 job,
                 apply,
             )
-
-    def _show_hard_limit_summary(
-        self, agent_name: str, chunk_count: int
-    ) -> None:
-        signature = ("hard-limit", id(self._current_agent), chunk_count)
-        self._paged_mode = False
-        self._update_page_controls()
-        self.live_notice_label.setText(self.HARD_LIMIT_WARNING)
-        self.live_notice_label.show()
-        self.info_label.setText(
-            f"{agent_name} · {chunk_count:,} chunks · interactive graph deferred"
-        )
-        if signature == self._signature:
-            return
-        self._signature = signature
-        snapshot = DeclarativeMemorySnapshot(
-            memories=[], chunks=[], edges=[], operations=[]
-        )
-        title = f"Current Declarative Memory — {agent_name}"
-        self.graph.setScene(
-            build_declarative_memory_scene(snapshot, title=title)
-        )
-        self.graph.set_llm_export_data(
-            declarative_memory_payload(snapshot, title=title),
-            default_name=f"{agent_name}_declarative_memory_summary",
-        )
 
     def _live_preflight_exceeds_budget(
         self,
@@ -430,50 +381,8 @@ class DeclarativeMemoryInspectorTab(QWidget):
         self.live_notice_label.setText(self.LIVE_WARNING)
         self.live_notice_label.show()
 
-    def _show_previous_page(self) -> None:
-        if not self._paged_mode or self._current_agent is None:
-            return
-        self._page_start = max(0, self._page_start - self.PAUSED_PAGE_SIZE)
-        self.update_agent(
-            self._current_agent, automatic_running=False, force=True
-        )
-
-    def _show_next_page(self) -> None:
-        if not self._paged_mode or self._current_agent is None:
-            return
-        latest_start = max(
-            0, self._total_chunk_count - self.PAUSED_PAGE_SIZE
-        )
-        self._page_start = min(
-            latest_start, self._page_start + self.PAUSED_PAGE_SIZE
-        )
-        self.update_agent(
-            self._current_agent, automatic_running=False, force=True
-        )
-
-    def _show_latest_page(self) -> None:
-        if not self._paged_mode or self._current_agent is None:
-            return
-        self._page_start = max(
-            0, self._total_chunk_count - self.PAUSED_PAGE_SIZE
-        )
-        self.update_agent(
-            self._current_agent, automatic_running=False, force=True
-        )
-
     def _update_page_controls(self) -> None:
-        enabled = self._paged_mode
-        latest_start = max(
-            0, self._total_chunk_count - self.PAUSED_PAGE_SIZE
-        )
-        self.previous_button.setEnabled(enabled and self._page_start > 0)
-        self.next_button.setEnabled(
-            enabled and self._page_start < latest_start
-        )
-        self.latest_button.setEnabled(
-            enabled and self._page_start < latest_start
-        )
-        if enabled and self._total_chunk_count:
+        if self._paged_mode and self._total_chunk_count:
             end = min(
                 self._total_chunk_count,
                 self._page_start + self.PAUSED_PAGE_SIZE,

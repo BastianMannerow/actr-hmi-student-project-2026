@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from gui.environment_canvas import GridCanvas
+from gui.environment_symbols import EnvironmentLegendMarker, EnvironmentSymbol
 
 
 class EnvironmentView(QFrame):
@@ -46,34 +47,21 @@ class EnvironmentView(QFrame):
         row = QHBoxLayout(legend)
         row.setContentsMargins(10, 7, 10, 7)
         row.setSpacing(14)
-        row.addWidget(self._legend_item("#7f1d1d", "X", "Burning tree (blocked)"))
-        row.addWidget(self._legend_item("#9a3412", "B", "Burning bush (unknown)"))
-        row.addWidget(self._legend_item("#16a34a", "F", "Fire target"))
-        row.addWidget(self._legend_item("#2563eb", "A", "ACT-R agent", circular=True))
-        row.addWidget(self._legend_item("#f59e0b", "H", "Human agent", circular=True))
+        row.addWidget(self._legend_item(EnvironmentSymbol.BURNING_TREE, "Burning tree (blocked)"))
+        row.addWidget(self._legend_item(EnvironmentSymbol.BURNING_BUSH, "Burning bush (unknown)"))
+        row.addWidget(self._legend_item(EnvironmentSymbol.FIRE_TARGET, "Fire target"))
+        row.addWidget(self._legend_item(EnvironmentSymbol.ACTR_AGENT, "ACT-R agent"))
+        row.addWidget(self._legend_item(EnvironmentSymbol.HUMAN_AGENT, "Human agent"))
         row.addStretch(1)
         return legend
 
     @staticmethod
-    def _legend_item(
-        color: str,
-        symbol: str,
-        text: str,
-        *,
-        circular: bool = False,
-    ) -> QWidget:
+    def _legend_item(symbol: EnvironmentSymbol, text: str) -> QWidget:
         item = QWidget()
         item_layout = QHBoxLayout(item)
         item_layout.setContentsMargins(0, 0, 0, 0)
         item_layout.setSpacing(5)
-        marker = QLabel(symbol)
-        marker.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        marker.setFixedSize(22, 22)
-        radius = "11px" if circular else "4px"
-        marker.setStyleSheet(
-            f"background: {color}; color: white; border: 1px solid #cbd5e1; "
-            f"border-radius: {radius}; font-weight: 700;"
-        )
+        marker = EnvironmentLegendMarker(symbol, item)
         label = QLabel(text)
         label.setObjectName("muted")
         item_layout.addWidget(marker)

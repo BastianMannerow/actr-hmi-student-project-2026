@@ -724,7 +724,23 @@ def add_to_declarative_memory(agent_construct: Any, chunk: chunks.Chunk) -> None
     chunk : Chunk
         :class:`pyactr.chunks.Chunk` to be stored.
     """
-    agent_construct.actr_agent.decmem.add(chunk)
+    model = agent_construct.actr_agent
+    model.decmem.add(chunk)
+    registry = getattr(model, "_explicit_declarative_chunks", None)
+    if registry is None:
+        registry = set()
+        model._explicit_declarative_chunks = registry
+    registry.add(chunk)
+
+
+def unregister_explicit_declarative_chunk(
+    agent_construct: Any, chunk: chunks.Chunk
+) -> None:
+    """Remove a replaced chunk from the explicit-memory provenance registry."""
+    model = getattr(agent_construct, "actr_agent", None)
+    registry = getattr(model, "_explicit_declarative_chunks", None)
+    if registry is not None:
+        registry.discard(chunk)
 
 
 def get_declarative_chunk_type(agent_construct: Any, typename: str):
