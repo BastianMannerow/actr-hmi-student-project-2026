@@ -24,6 +24,9 @@ from pyactr import chunks, utilities
 from pyactr.utilities import ACTRError
 
 
+_VISUAL_PATCHED = False
+
+
 def fix_pyactr() -> None:
     """
     Monkey-patch pyACT-R's :class:`VisualLocation` search routine.
@@ -44,6 +47,10 @@ def fix_pyactr() -> None:
     (:class:`pyactr.vision.VisualLocation`). Call it once during
     application start-up, before running simulations.
     """
+    global _VISUAL_PATCHED
+    if _VISUAL_PATCHED:
+        return
+    _VISUAL_PATCHED = True
     _original_find = vision.VisualLocation.find  # kept for potential restoration
 
     def patched_find(self, otherchunk, actrvariables=None, extra_tests=None):
@@ -273,6 +280,9 @@ def publish_visual_stimulus(agent_construct: Any) -> dict[str, dict[str, Any]]:
             continue
 
     if buffers_changed:
+        marker = getattr(agent_construct, "mark_buffer_dirty", None)
+        if callable(marker):
+            marker("visual", "visual_location")
         activation = getattr(simulation, "_Simulation__proc_activate", None)
         try:
             if activation is not None and not activation.triggered:
@@ -460,7 +470,12 @@ def get_goal(agent_construct: Any):
     return agent_construct.actr_agent.goals.get(key, None)
 
 
-def set_goal(agent_construct: Any, chunk: chunks.Chunk) -> None:
+def set_goal(
+    agent_construct: Any,
+    chunk: chunks.Chunk,
+    *,
+    delay: float = 0.0,
+) -> None:
     """
     Insert a chunk into the primary goal buffer.
 
@@ -472,11 +487,48 @@ def set_goal(agent_construct: Any, chunk: chunks.Chunk) -> None:
         :class:`pyactr.chunks.Chunk` instance to be added to the goal buffer.
     """
     first_goal = next(iter(agent_construct.actr_agent.goals.values()))
-    try:
-        first_goal.clear()
-    except AttributeError:
-        pass
-    first_goal.add(chunk)
+
+    def replace_now() -> None:
+        try:
+            first_goal.clear()
+        except AttributeError:
+            pass
+        first_goal.add(chunk)
+        marker = getattr(agent_construct, "mark_buffer_dirty", None)
+        if callable(marker):
+            marker("g")
+
+    cognitive_delay = max(0.0, float(delay))
+    simulation = getattr(agent_construct, "simulation", None)
+    simpy_environment = getattr(simulation, "_Simulation__simulation", None)
+    if cognitive_delay <= 0.0 or simpy_environment is None:
+        replace_now()
+        return
+
+    # Supersede stale delayed goal updates.  This matters when an external
+    # adapter receives two world callbacks before the first cognitive commit.
+    version = int(getattr(agent_construct, "_delayed_goal_version", 0)) + 1
+    agent_construct._delayed_goal_version = version
+
+    def delayed_goal_update():
+        yield simpy_environment.timeout(cognitive_delay)
+        if int(getattr(agent_construct, "_delayed_goal_version", 0)) != version:
+            return
+        replace_now()
+
+        # Direct adapter writes are outside pyactr's production update
+        # generator.  Emit a normal buffer event so the procedural module is
+        # reactivated at the cognitively delayed time.
+        event_time = round(float(simpy_environment.now), 4)
+        event = utilities.Event(event_time, "g", "MODIFIED")
+        print_event = getattr(simulation, "__printevent__", None)
+        activate = getattr(simulation, "__activate__", None)
+        if callable(print_event):
+            print_event(event)
+        if callable(activate):
+            activate(event)
+
+    simpy_environment.process(delayed_goal_update())
 
 
 def get_imaginal(agent_construct: Any, key: str):
@@ -529,6 +581,9 @@ def replace_buffer(agent_construct: Any, name: str, chunk: chunks.Chunk) -> None
         pass
     if chunk is not None:
         buffer.add(chunk)
+    marker = getattr(agent_construct, "mark_buffer_dirty", None)
+    if callable(marker):
+        marker(name)
 
 
 def set_buffer(agent_construct: Any, name: str, chunk: chunks.Chunk) -> None:
@@ -573,6 +628,9 @@ def set_imaginal(agent_construct: Any, new_chunk: chunks.Chunk, key: str) -> Non
         target.add(new_chunk)
     except AttributeError as exc:
         raise TypeError(f"Goal object for '{key}' does not support '.add()'.") from exc
+    marker = getattr(agent_construct, "mark_buffer_dirty", None)
+    if callable(marker):
+        marker(key)
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import math
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -60,6 +61,11 @@ class RosTurtleBridge:
         self._DriveDistance = None
         self._RotateAngle = None
         self._GoalStatus = None
+        self._motion_executor = ThreadPoolExecutor(
+            max_workers=max(1, len(agents)),
+            thread_name_prefix="actr-ros-move",
+        )
+        self._last_odom_update: dict[str, float] = {}
 
     def start(self) -> None:
         """Initialize ROS 2 resources and clean up partial startup on failure."""
@@ -102,7 +108,7 @@ class RosTurtleBridge:
             from rclpy.executors import MultiThreadedExecutor
 
             self._executor = MultiThreadedExecutor(
-                num_threads=max(2, len(self.agents) + 1)
+                num_threads=min(8, max(2, len(self.agents) + 1))
             )
             self._executor.add_node(self._node)
             self._spin_thread = threading.Thread(
@@ -178,12 +184,12 @@ class RosTurtleBridge:
                 return False
             channel.busy = True
             channel.bumped = False
-        threading.Thread(
-            target=self._execute_grid_move,
-            args=(channel, dr, dc),
-            name=f"actr-ros-move-{self._sanitize(name)}",
-            daemon=True,
-        ).start()
+        try:
+            self._motion_executor.submit(self._execute_grid_move, channel, dr, dc)
+        except RuntimeError:
+            with self._lock:
+                channel.busy = False
+            return False
         return True
 
     def _execute_grid_move(self, channel: _RobotChannel, dr: int, dc: int) -> None:
@@ -350,6 +356,11 @@ class RosTurtleBridge:
 
     def _odom_callback(self, agent_name: str):
         def callback(message: Any) -> None:
+            now = time.monotonic()
+            previous = self._last_odom_update.get(agent_name, 0.0)
+            if now - previous < 0.05:
+                return
+            self._last_odom_update[agent_name] = now
             orientation = message.pose.pose.orientation
             siny = 2.0 * (orientation.w * orientation.z + orientation.x * orientation.y)
             cosy = 1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z)
@@ -384,6 +395,7 @@ class RosTurtleBridge:
             channel.publisher.publish(self._Twist())
 
     def close(self) -> None:
+        self._motion_executor.shutdown(wait=False, cancel_futures=True)
         with self._lock:
             channels = list(self._channels.values())
         for channel in channels:

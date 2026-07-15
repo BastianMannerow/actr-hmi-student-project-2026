@@ -102,6 +102,7 @@ class SimulationConfig:
     print_middleman: bool = False
     speed_factor: float = 100.0
     print_agent_actions: bool = True
+    experimental_pyactr_performance_boost: bool = False
     los: int = 3
     execution_mode: str = "single"
     environment_mode: str = "virtual"
@@ -180,6 +181,7 @@ class SimulationConfig:
             "speed_factor": self.speed_factor,
             "speed_label": self.speed_label,
             "print_agent_actions": self.print_agent_actions,
+            "experimental_pyactr_performance_boost": self.experimental_pyactr_performance_boost,
             "los": self.los,
             "execution_mode": self.execution_mode,
             "stepper": self.stepper,
@@ -232,6 +234,9 @@ class SimulationConfig:
             print_middleman=bool(payload.get("print_middleman", False)),
             speed_factor=speed,
             print_agent_actions=bool(payload.get("print_agent_actions", True)),
+            experimental_pyactr_performance_boost=bool(
+                payload.get("experimental_pyactr_performance_boost", False)
+            ),
             los=max(0, int(payload.get("los", 3))),
             execution_mode=str(payload.get("execution_mode", "single")),
             environment_mode=mode,

@@ -44,7 +44,7 @@ class CountingAgent:
         )
 
         model.productionstring(
-            name=f"{{{self.PHASE_COUNT}}}_one_to_two",
+            name=f"{self.PHASE_COUNT}_one_to_two",
             string="""
                 =g>
                 isa counting_goal
@@ -59,7 +59,7 @@ class CountingAgent:
         )
 
         model.productionstring(
-            name=f"{{{self.PHASE_COUNT}}}_two_to_three",
+            name=f"{self.PHASE_COUNT}_two_to_three",
             string="""
                 =g>
                 isa counting_goal
@@ -74,7 +74,7 @@ class CountingAgent:
         )
 
         model.productionstring(
-            name=f"{{{self.PHASE_COUNT}}}_three_to_four",
+            name=f"{self.PHASE_COUNT}_three_to_four",
             string="""
                 =g>
                 isa counting_goal
@@ -89,7 +89,7 @@ class CountingAgent:
         )
 
         model.productionstring(
-            name=f"{{{self.PHASE_COUNT}}}_four_to_five",
+            name=f"{self.PHASE_COUNT}_four_to_five",
             string="""
                 =g>
                 isa counting_goal
@@ -104,7 +104,7 @@ class CountingAgent:
         )
 
         model.productionstring(
-            name=f"{{{self.PHASE_COUNT}}}_five_to_six",
+            name=f"{self.PHASE_COUNT}_five_to_six",
             string="""
                 =g>
                 isa counting_goal
@@ -119,7 +119,7 @@ class CountingAgent:
         )
 
         model.productionstring(
-            name=f"{{{self.PHASE_COUNT}}}_six_to_seven",
+            name=f"{self.PHASE_COUNT}_six_to_seven",
             string="""
                 =g>
                 isa counting_goal
@@ -133,8 +133,11 @@ class CountingAgent:
             """,
         )
 
+        # Intentionally no seven-to-eight production: the counting demo
+        # retains a visible functional gap/dead end at seven.
+
         model.productionstring(
-            name=f"{{{self.PHASE_COUNT}}}_eight_to_nine",
+            name=f"{self.PHASE_COUNT}_eight_to_nine",
             string="""
                 =g>
                 isa counting_goal
@@ -149,7 +152,7 @@ class CountingAgent:
         )
 
         model.productionstring(
-            name=f"{{{self.PHASE_COUNT}}}_nine_to_ten",
+            name=f"{self.PHASE_COUNT}_nine_to_ten",
             string="""
                 =g>
                 isa counting_goal
@@ -164,7 +167,7 @@ class CountingAgent:
         )
 
         model.productionstring(
-            name=f"{{{self.PHASE_COUNT}}}_ten_complete",
+            name=f"{self.PHASE_COUNT}_ten_complete",
             string="""
                 =g>
                 isa counting_goal
@@ -179,7 +182,7 @@ class CountingAgent:
         )
 
         model.productionstring(
-            name=f"{{{self.PHASE_COUNT}}}_standby",
+            name=f"{self.PHASE_COUNT}_standby",
             string="""
                 =g>
                 isa counting_goal

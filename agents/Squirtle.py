@@ -42,6 +42,18 @@ class Squirtle:
     CAUTIOUS_PROGRESS_REWARD = 1.5
     TARGET_REWARD = 15.0
 
+    # The six structured workspaces are implemented with pyactr Goal buffers,
+    # but model distinct imaginal operations.  Their non-zero creation costs
+    # prevent the adapter from behaving like latency-free working memory.
+    IMAGINAL_DELAYS = {
+        "situation_model_imaginal": 0.20,
+        "mission_context_imaginal": 0.20,
+        "decision_workspace_imaginal": 0.25,
+        "semantic_appraisal_imaginal": 0.20,
+        "route_workspace_imaginal": 0.15,
+        "episode_workspace_imaginal": 0.20,
+    }
+
     def __init__(self, environ):
         self.environ = environ
         self.this_agent_key = None
@@ -53,10 +65,6 @@ class Squirtle:
             subsymbolic=True,
         )
         self.initial_goal = None
-
-    @staticmethod
-    def _name(phase: str, action: str) -> str:
-        return f"{{{phase}}}_{action}"
 
     def build_agent(self, agent_list):
         self.this_agent_key = agent_list[0]
@@ -85,12 +93,8 @@ class Squirtle:
             """
         )
 
-        model.set_goal(name="situation_model_imaginal", delay=0)
-        model.set_goal(name="mission_context_imaginal", delay=0)
-        model.set_goal(name="decision_workspace_imaginal", delay=0)
-        model.set_goal(name="semantic_appraisal_imaginal", delay=0)
-        model.set_goal(name="route_workspace_imaginal", delay=0)
-        model.set_goal(name="episode_workspace_imaginal", delay=0)
+        for buffer_name, delay in self.IMAGINAL_DELAYS.items():
+            model.set_goal(name=buffer_name, delay=delay)
 
         self._add_control_productions(model)
         self._add_planning_productions(model)
@@ -408,7 +412,7 @@ class Squirtle:
     def _add_control_productions(self, model) -> None:
         self._transition(
             model,
-            self._name(self.PHASE_MISSION, "initialize_mental_model"),
+            f"{self.PHASE_MISSION}_initialize_mental_model",
             self.PHASE_MISSION,
             "initialize",
             self.PHASE_SENSE,
@@ -416,7 +420,7 @@ class Squirtle:
         )
         self._transition(
             model,
-            self._name(self.PHASE_SENSE, "refresh_context"),
+            f"{self.PHASE_SENSE}_refresh_context",
             self.PHASE_SENSE,
             "refresh_context",
             self.PHASE_SENSE,
@@ -424,7 +428,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_TARGET, "register_visit"),
+            name=f"{self.PHASE_TARGET}_register_visit",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -450,7 +454,7 @@ class Squirtle:
 
         self._transition(
             model,
-            self._name(self.PHASE_EXPLORE, "plan_frontier"),
+            f"{self.PHASE_EXPLORE}_plan_frontier",
             self.PHASE_EXPLORE,
             "plan_frontier",
             self.PHASE_EXPLORE,
@@ -458,7 +462,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_OUTCOME, "inspect_motion"),
+            name=f"{self.PHASE_OUTCOME}_inspect_motion",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -485,7 +489,7 @@ class Squirtle:
 
         self._transition(
             model,
-            self._name(self.PHASE_REPLAN, "avoid_learned_hazard"),
+            f"{self.PHASE_REPLAN}_avoid_learned_hazard",
             self.PHASE_REPLAN,
             "avoid_learned_hazard",
             self.PHASE_SENSE,
@@ -494,7 +498,7 @@ class Squirtle:
 
     def _add_planning_productions(self, model) -> None:
         model.productionstring(
-            name=self._name(self.PHASE_PLAN, "request_semantic_appraisal"),
+            name=f"{self.PHASE_PLAN}_request_semantic_appraisal",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -523,7 +527,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_PLAN, "accept_clear_route"),
+            name=f"{self.PHASE_PLAN}_accept_clear_route",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -547,7 +551,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_PLAN, "no_route_available"),
+            name=f"{self.PHASE_PLAN}_no_route_available",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -571,7 +575,7 @@ class Squirtle:
 
     def _add_semantic_retrieval_productions(self, model) -> None:
         model.productionstring(
-            name=self._name(self.PHASE_RISK, "request_hazard_semantics"),
+            name=f"{self.PHASE_RISK}_request_hazard_semantics",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -598,7 +602,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_RISK, "integrate_semantic_appraisal"),
+            name=f"{self.PHASE_RISK}_integrate_semantic_appraisal",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -638,7 +642,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_RISK, "known_passable_cell"),
+            name=f"{self.PHASE_RISK}_known_passable_cell",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -660,7 +664,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_RISK, "known_blocked_cell"),
+            name=f"{self.PHASE_RISK}_known_blocked_cell",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -682,7 +686,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_RISK, "memory_remains_uncertain"),
+            name=f"{self.PHASE_RISK}_memory_remains_uncertain",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -704,7 +708,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_RISK, "cell_memory_miss"),
+            name=f"{self.PHASE_RISK}_cell_memory_miss",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -726,7 +730,7 @@ class Squirtle:
 
     def _add_disposition_productions(self, model) -> None:
         model.productionstring(
-            name=self._name(self.PHASE_DECIDE, "bravery_probe_unknown_fire"),
+            name=f"{self.PHASE_DECIDE}_bravery_probe_unknown_fire",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -759,7 +763,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_DECIDE, "caution_take_safe_detour"),
+            name=f"{self.PHASE_DECIDE}_caution_take_safe_detour",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -792,7 +796,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_DECIDE, "emergency_bravery_without_detour"),
+            name=f"{self.PHASE_DECIDE}_emergency_bravery_without_detour",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -819,7 +823,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_DECIDE, "apply_brave_policy"),
+            name=f"{self.PHASE_DECIDE}_apply_brave_policy",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -867,7 +871,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_DECIDE, "apply_cautious_policy"),
+            name=f"{self.PHASE_DECIDE}_apply_cautious_policy",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -922,7 +926,7 @@ class Squirtle:
             "right": "D",
         }.items():
             model.productionstring(
-                name=self._name(self.PHASE_MOVE, f"execute_{direction}"),
+                name=f"{self.PHASE_MOVE}_execute_{direction}",
                 string=f"""
                     =g>
                     isa firefighting_goal
@@ -953,7 +957,7 @@ class Squirtle:
 
     def _add_evaluation_productions(self, model) -> None:
         model.productionstring(
-            name=self._name(self.PHASE_EVALUATE, "punish_failed_bravery"),
+            name=f"{self.PHASE_EVALUATE}_punish_failed_bravery",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -978,7 +982,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_EVALUATE, "reward_successful_bravery"),
+            name=f"{self.PHASE_EVALUATE}_reward_successful_bravery",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -1003,7 +1007,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_EVALUATE, "reward_cautious_progress"),
+            name=f"{self.PHASE_EVALUATE}_reward_cautious_progress",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -1028,7 +1032,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_EVALUATE, "record_clear_progress"),
+            name=f"{self.PHASE_EVALUATE}_record_clear_progress",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -1052,7 +1056,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_EVALUATE, "record_unexpected_blockage"),
+            name=f"{self.PHASE_EVALUATE}_record_unexpected_blockage",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -1075,7 +1079,7 @@ class Squirtle:
         )
 
         model.productionstring(
-            name=self._name(self.PHASE_EVALUATE, "recognize_target_reached"),
+            name=f"{self.PHASE_EVALUATE}_recognize_target_reached",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -1100,7 +1104,7 @@ class Squirtle:
 
     def _add_terminal_productions(self, model) -> None:
         model.productionstring(
-            name=self._name(self.PHASE_MISSION, "complete"),
+            name=f"{self.PHASE_MISSION}_complete",
             string=f"""
                 =g>
                 isa firefighting_goal
@@ -1124,7 +1128,7 @@ class Squirtle:
 
         self._transition(
             model,
-            self._name(self.PHASE_MISSION, "standby"),
+            f"{self.PHASE_MISSION}_standby",
             self.PHASE_MISSION,
             "standby",
             self.PHASE_MISSION,

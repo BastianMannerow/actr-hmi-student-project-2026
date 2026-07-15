@@ -25,10 +25,17 @@ class SquirtleAdapter:
     TRAVERSABLE = {"free", "target", "bush_passable"}
     UNKNOWN_TERRAIN = {"bush_unknown", "unknown"}
 
-    BRAVERY_SUCCESS_DELTA = 0.55
-    BRAVERY_FAILURE_DELTA = -1.25
-    CAUTION_AFTER_FAILURE_DELTA = 0.15
-    CAUTION_PROGRESS_DELTA = 0.03
+    BRAVERY_GENERALIZATION_MARGIN = 0.10
+    BRAVERY_TIME_GAIN_PER_SECOND = 0.018
+    BRAVERY_UTILITY_CEILING = 2.0
+    IMAGINAL_DELAYS = {
+        "situation_model_imaginal": 0.20,
+        "mission_context_imaginal": 0.20,
+        "decision_workspace_imaginal": 0.25,
+        "semantic_appraisal_imaginal": 0.20,
+        "route_workspace_imaginal": 0.15,
+        "episode_workspace_imaginal": 0.20,
+    }
 
     TERRAIN_SEMANTICS = {
         "free": ("terrain_free_ground", "passability_passable", "danger_none"),
@@ -52,6 +59,7 @@ class SquirtleAdapter:
         self.pending_brave_path: list[tuple[int, int]] = []
         self.pending_clear_path: list[tuple[int, int]] = []
         self.pending_risk_cell: tuple[int, int] | None = None
+        self.committed_brave_risk_cell: tuple[int, int] | None = None
 
         self.last_attempt: tuple[int, int] | None = None
         self.last_start: tuple[int, int] | None = None
@@ -64,10 +72,13 @@ class SquirtleAdapter:
         self.last_episode_id = "episode_none"
         self.pending_episode: dict[str, Any] | None = None
         self._pending_production_handoff: str | None = None
+        self._last_courage_update_time = 0.0
+        self._last_brave_choice_production: str | None = None
+        self._pending_imaginal_delay = 0.0
 
     @staticmethod
     def _production(phase: str, action: str) -> str:
-        return f"{{{phase}}}_{action}"
+        return f"{phase}_{action}"
 
     def extending_actr(self) -> None:
         agent = self.agent_construct
@@ -76,6 +87,11 @@ class SquirtleAdapter:
 
         fired_production = pyactr_extension.get_production_fired(agent)
         if fired_production:
+            if fired_production in {
+                self._production("DECIDE", "bravery_probe_unknown_fire"),
+                self._production("DECIDE", "emergency_bravery_without_detour"),
+            }:
+                self._last_brave_choice_production = fired_production
             # pyactr reports RULE FIRED before all scheduled buffer writes have
             # completed.  Execute the adapter handoff on the following event so
             # its goal and imaginal updates cannot be overwritten by the rule.
@@ -87,33 +103,33 @@ class SquirtleAdapter:
         if not production:
             return
 
-        if production == "{SENSE}_refresh_context":
+        if production == "SENSE_refresh_context":
             self._refresh_situational_awareness()
-        elif production == "{TARGET}_register_visit":
+        elif production == "TARGET_register_visit":
             self._register_target_visit()
-        elif production == "{EXPLORE}_plan_frontier":
+        elif production == "EXPLORE_plan_frontier":
             self._plan_exploration()
-        elif production == "{PLAN}_accept_clear_route":
+        elif production == "PLAN_accept_clear_route":
             self._commit_clear_route()
-        elif production == "{RISK}_known_passable_cell":
+        elif production == "RISK_known_passable_cell":
             self._commit_brave_route()
-        elif production == "{RISK}_known_blocked_cell":
+        elif production == "RISK_known_blocked_cell":
             self._commit_cautious_route()
-        elif production == "{DECIDE}_apply_brave_policy":
+        elif production == "DECIDE_apply_brave_policy":
             self._commit_brave_route()
-        elif production == "{DECIDE}_apply_cautious_policy":
+        elif production == "DECIDE_apply_cautious_policy":
             self._commit_cautious_route()
-        elif production == "{OUTCOME}_inspect_motion":
+        elif production == "OUTCOME_inspect_motion":
             self._evaluate_motion()
-        elif production == "{EVALUATE}_punish_failed_bravery":
+        elif production == "EVALUATE_punish_failed_bravery":
             self._consolidate_failed_bravery()
-        elif production == "{EVALUATE}_reward_successful_bravery":
+        elif production == "EVALUATE_reward_successful_bravery":
             self._consolidate_successful_bravery()
-        elif production == "{EVALUATE}_reward_cautious_progress":
+        elif production == "EVALUATE_reward_cautious_progress":
             self._consolidate_cautious_progress()
-        elif production == "{EVALUATE}_record_clear_progress":
+        elif production == "EVALUATE_record_clear_progress":
             self._consolidate_clear_progress()
-        elif production == "{EVALUATE}_record_unexpected_blockage":
+        elif production == "EVALUATE_record_unexpected_blockage":
             self._consolidate_blockage()
 
     def on_bump_detected(self, *, reason: str = "obstacle", **_kwargs) -> None:
@@ -128,11 +144,13 @@ class SquirtleAdapter:
         if current is None:
             return
 
+        self._apply_time_pressure_to_bravery()
         self._observe_visual_stimuli(current)
         known_targets = self._known_targets()
         current_terrain = self.known_map.get(current, "free")
 
         if current in known_targets and current not in self.visited_targets:
+            self.committed_brave_risk_cell = None
             self.active_target = current
             self._write_situation_model(current, status="target_reached")
             self._write_mission_context(current, status="target_reached")
@@ -147,9 +165,13 @@ class SquirtleAdapter:
             return
 
         if len(self.visited_targets) >= self.TOTAL_TARGETS:
+            self.committed_brave_risk_cell = None
             self._write_situation_model(current, status="complete")
             self._write_mission_context(None, status="complete")
             self._set_goal("MISSION", "complete", "none", "all_targets_secured")
+            return
+
+        if self._continue_brave_commitment(current):
             return
 
         targets = sorted(known_targets - self.visited_targets)
@@ -405,6 +427,52 @@ class SquirtleAdapter:
         self._write_semantic_appraisal("terrain_unknown", source="no_route")
         self._set_goal("PLAN", "evaluate_options", "none", "none")
 
+    def _continue_brave_commitment(self, current: tuple[int, int]) -> bool:
+        """Continue toward a previously chosen uncertain fire cell.
+
+        Without this commitment, the agent can select the brave policy, take a
+        harmless approach step and then reconsider before ever testing the
+        bush.  The commitment persists until the uncertain cell is either
+        crossed or produces a bump.
+        """
+
+        risk_cell = self.committed_brave_risk_cell
+        if risk_cell is None:
+            return False
+        if current == risk_cell:
+            self.committed_brave_risk_cell = None
+            return False
+        if self.known_map.get(risk_cell) not in self.UNKNOWN_TERRAIN:
+            self.committed_brave_risk_cell = None
+            return False
+
+        path = self._route(current, risk_cell, allow_unknown=True)
+        if len(path) < 2:
+            self.committed_brave_risk_cell = None
+            return False
+
+        self.pending_safe_path = []
+        self.pending_brave_path = path
+        self.pending_clear_path = []
+        self.pending_risk_cell = risk_cell
+        terrain_id, _, _ = self._terrain_semantics(
+            self.known_map.get(risk_cell, "unknown")
+        )
+        self._write_situation_model(current, status="committed_brave_probe")
+        self._write_mission_context(self.active_target, status="active")
+        self._write_decision_workspace(
+            safe_path=[],
+            brave_path=path,
+            risk_cell=risk_cell,
+            appraisal_required=True,
+        )
+        # Keep the production-facing source value compatible with the normal
+        # semantic integration rule; the commitment is represented by the
+        # adapter state and route workspace rather than a new chunk literal.
+        self._write_semantic_appraisal(terrain_id, source="pending")
+        self._set_goal("PLAN", "evaluate_options", "none", "none")
+        return True
+
     def _plan_exploration(self) -> None:
         current = self._current_position()
         if current is None:
@@ -457,6 +525,9 @@ class SquirtleAdapter:
         self._commit_pending_route("clear")
 
     def _commit_brave_route(self) -> None:
+        risk_cell = self.pending_risk_cell
+        if risk_cell is not None and self.known_map.get(risk_cell) in self.UNKNOWN_TERRAIN:
+            self.committed_brave_risk_cell = risk_cell
         self._commit_pending_route("brave")
 
     def _commit_cautious_route(self) -> None:
@@ -467,6 +538,9 @@ class SquirtleAdapter:
             path = self.pending_brave_path
             policy = "policy_brave_probe"
             route_kind = "brave_probe"
+            risk_cell = self.committed_brave_risk_cell or self.pending_risk_cell
+            if risk_cell in path:
+                path = path[: path.index(risk_cell) + 1]
         elif choice == "cautious":
             path = self.pending_safe_path
             policy = "policy_cautious_detour"
@@ -548,6 +622,8 @@ class SquirtleAdapter:
         terrain_id, _, _ = self._terrain_semantics(previous_terrain)
 
         if self.bumped or current != attempted:
+            if attempted == self.committed_brave_risk_cell:
+                self.committed_brave_risk_cell = None
             learned = "bush_blocked" if previous_terrain == "bush_unknown" else "tree"
             self._record_attempt(attempted, success=False)
             self.known_map[attempted] = learned
@@ -567,6 +643,8 @@ class SquirtleAdapter:
             return
 
         if previous_terrain == "bush_unknown":
+            if attempted == self.committed_brave_risk_cell:
+                self.committed_brave_risk_cell = None
             self._record_attempt(attempted, success=True)
             self.known_map[attempted] = "bush_passable"
             self.map_revision += 1
@@ -574,6 +652,7 @@ class SquirtleAdapter:
             self._upsert_spatial_relations(attempted)
 
         if current in self._known_targets() and current not in self.visited_targets:
+            self.committed_brave_risk_cell = None
             self.active_target = current
             self._write_mission_context(current, status="target_reached")
             self._write_episode_workspace(
@@ -610,18 +689,16 @@ class SquirtleAdapter:
 
     def _consolidate_failed_bravery(self) -> None:
         self._store_pending_episode()
-        self._adjust_policy_utility("brave", self.BRAVERY_FAILURE_DELTA)
-        self._adjust_policy_utility("cautious", self.CAUTION_AFTER_FAILURE_DELTA)
+        self._generalize_bravery_reward(success=False)
         self._set_goal("SENSE", "refresh_context", "none", "failure_learned")
 
     def _consolidate_successful_bravery(self) -> None:
         self._store_pending_episode()
-        self._adjust_policy_utility("brave", self.BRAVERY_SUCCESS_DELTA)
+        self._generalize_bravery_reward(success=True)
         self._set_goal("SENSE", "refresh_context", "none", "success_learned")
 
     def _consolidate_cautious_progress(self) -> None:
         self._store_pending_episode()
-        self._adjust_policy_utility("cautious", self.CAUTION_PROGRESS_DELTA)
         self._set_goal("SENSE", "refresh_context", "none", "caution_reinforced")
 
     def _consolidate_clear_progress(self) -> None:
@@ -663,6 +740,10 @@ class SquirtleAdapter:
                 outcome_id {outcome_id}
                 reward_signal {reward_signal}
             """
+        )
+        self._pending_imaginal_delay = max(
+            self._pending_imaginal_delay,
+            self.IMAGINAL_DELAYS["episode_workspace_imaginal"],
         )
         pyactr_extension.replace_buffer(
             self.agent_construct,
@@ -721,27 +802,75 @@ class SquirtleAdapter:
         self.last_episode_id = str(episode["episode_id"])
         self.pending_episode = None
 
-    def _adjust_policy_utility(self, policy: str, delta: float) -> None:
-        if policy == "brave":
-            production_names = [
-                self._production("DECIDE", "bravery_probe_unknown_fire"),
-                self._production("DECIDE", "emergency_bravery_without_detour"),
-            ]
-        else:
-            production_names = [
-                self._production("DECIDE", "caution_take_safe_detour"),
-            ]
-        for production_name in production_names:
+    def _bravery_productions(self) -> tuple[str, str]:
+        return (
+            self._production("DECIDE", "bravery_probe_unknown_fire"),
+            self._production("DECIDE", "emergency_bravery_without_detour"),
+        )
+
+    def _generalize_bravery_reward(self, *, success: bool) -> None:
+        """Generalize ACT-R's learned reward to both bravery productions.
+
+        pyactr applies the configured production reward before the adapter
+        handoff.  A blocked bush therefore lowers the utility of the brave
+        choice that actually led to the failure.  This method shares that
+        learned courage value with the sibling brave production, without
+        applying a second independent reward update.
+        """
+
+        chosen = self._last_brave_choice_production
+        if chosen is None:
+            return
+        learned = pyactr_extension.get_production_utility(self.agent_construct, chosen)
+        if learned is None:
+            return
+
+        for production_name in self._bravery_productions():
+            if production_name == chosen:
+                continue
             current = pyactr_extension.get_production_utility(
                 self.agent_construct,
                 production_name,
             )
             if current is None:
                 continue
+            if success:
+                target = float(learned) - self.BRAVERY_GENERALIZATION_MARGIN
+                updated = max(float(current), target)
+            else:
+                target = float(learned) + self.BRAVERY_GENERALIZATION_MARGIN
+                updated = min(float(current), target)
             pyactr_extension.update_utility(
                 self.agent_construct,
                 production_name,
-                round(float(current) + float(delta), 4),
+                round(updated, 4),
+            )
+
+    def _apply_time_pressure_to_bravery(self) -> None:
+        """Raise willingness to test fire gradually as ACT-R time passes."""
+
+        now = max(0.0, float(getattr(self.agent_construct, "actr_time", 0.0)))
+        elapsed = max(0.0, now - self._last_courage_update_time)
+        self._last_courage_update_time = now
+        if elapsed <= 0.0:
+            return
+
+        gain = elapsed * self.BRAVERY_TIME_GAIN_PER_SECOND
+        for production_name in self._bravery_productions():
+            current = pyactr_extension.get_production_utility(
+                self.agent_construct,
+                production_name,
+            )
+            if current is None:
+                continue
+            updated = min(
+                self.BRAVERY_UTILITY_CEILING,
+                float(current) + gain,
+            )
+            pyactr_extension.update_utility(
+                self.agent_construct,
+                production_name,
+                round(updated, 4),
             )
 
     # ------------------------------------------------------------------
@@ -763,6 +892,10 @@ class SquirtleAdapter:
                 mission_status {status}
                 map_revision {self.map_revision}
             """
+        )
+        self._pending_imaginal_delay = max(
+            self._pending_imaginal_delay,
+            self.IMAGINAL_DELAYS["situation_model_imaginal"],
         )
         pyactr_extension.replace_buffer(
             self.agent_construct,
@@ -787,6 +920,10 @@ class SquirtleAdapter:
                 total_targets {self.TOTAL_TARGETS}
                 mission_status {status}
             """
+        )
+        self._pending_imaginal_delay = max(
+            self._pending_imaginal_delay,
+            self.IMAGINAL_DELAYS["mission_context_imaginal"],
         )
         pyactr_extension.replace_buffer(
             self.agent_construct,
@@ -829,6 +966,10 @@ class SquirtleAdapter:
                 selected_policy none
             """
         )
+        self._pending_imaginal_delay = max(
+            self._pending_imaginal_delay,
+            self.IMAGINAL_DELAYS["decision_workspace_imaginal"],
+        )
         pyactr_extension.replace_buffer(
             self.agent_construct,
             "decision_workspace_imaginal",
@@ -862,6 +1003,10 @@ class SquirtleAdapter:
                 source {source}
             """
         )
+        self._pending_imaginal_delay = max(
+            self._pending_imaginal_delay,
+            self.IMAGINAL_DELAYS["semantic_appraisal_imaginal"],
+        )
         pyactr_extension.replace_buffer(
             self.agent_construct,
             "semantic_appraisal_imaginal",
@@ -889,6 +1034,10 @@ class SquirtleAdapter:
                 risk_cell {self._cell_id(risk_cell) if risk_cell else 'cell_none'}
             """
         )
+        self._pending_imaginal_delay = max(
+            self._pending_imaginal_delay,
+            self.IMAGINAL_DELAYS["route_workspace_imaginal"],
+        )
         pyactr_extension.replace_buffer(
             self.agent_construct,
             "route_workspace_imaginal",
@@ -905,7 +1054,13 @@ class SquirtleAdapter:
                 outcome {outcome}
             """
         )
-        pyactr_extension.set_goal(self.agent_construct, chunk)
+        commit_delay = self._pending_imaginal_delay
+        self._pending_imaginal_delay = 0.0
+        pyactr_extension.set_goal(
+            self.agent_construct,
+            chunk,
+            delay=commit_delay,
+        )
 
     # ------------------------------------------------------------------
     # Declarative-memory graph operations
