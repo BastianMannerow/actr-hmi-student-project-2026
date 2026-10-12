@@ -133,9 +133,9 @@ def indexed_retrieve(
         try:
             recently = extra_tests["recently_retrieved"]
             if recently is False or recently == "False":
-                if self._DecMemBuffer__finst and chunk in self.recent:
+                if self._DMBuffer__finst and chunk in self.recent:
                     continue
-            elif self._DecMemBuffer__finst and chunk not in self.recent:
+            elif self._DMBuffer__finst and chunk not in self.recent:
                 continue
         except KeyError:
             pass
@@ -216,25 +216,25 @@ def indexed_retrieve(
             )
         else:
             extra_time = model_parameters["rule_firing"]
-    if self._DecMemBuffer__finst:
+    if self._DMBuffer__finst:
         self.recent.append(retrieved)
-        if self._DecMemBuffer__finst < len(self.recent):
+        if self._DMBuffer__finst < len(self.recent):
             self.recent.popleft()
     return retrieved, extra_time
 
 
 def apply(remember: Callable[[str, Any, str], None]) -> None:
     global _ORIGINAL_SETITEM, _ORIGINAL_DELITEM
-    remember("DecMem.__setitem__", declarative.DecMem, "__setitem__")
-    remember("DecMem.__delitem__", declarative.DecMem, "__delitem__")
-    remember("DecMemBuffer.retrieve", declarative.DecMemBuffer, "retrieve")
+    remember("DM.__setitem__", declarative.DM, "__setitem__")
+    remember("DM.__delitem__", declarative.DM, "__delitem__")
+    remember("DMBuffer.retrieve", declarative.DMBuffer, "retrieve")
     if _ORIGINAL_SETITEM is None:
-        _ORIGINAL_SETITEM = declarative.DecMem.__setitem__
+        _ORIGINAL_SETITEM = declarative.DM.__setitem__
     if _ORIGINAL_DELITEM is None:
-        _ORIGINAL_DELITEM = declarative.DecMem.__delitem__
-    declarative.DecMem.__setitem__ = indexed_setitem
-    declarative.DecMem.__delitem__ = indexed_delitem
-    declarative.DecMemBuffer.retrieve = indexed_retrieve
+        _ORIGINAL_DELITEM = declarative.DM.__delitem__
+    declarative.DM.__setitem__ = indexed_setitem
+    declarative.DM.__delitem__ = indexed_delitem
+    declarative.DMBuffer.retrieve = indexed_retrieve
 
 
 def clear_caches() -> None:

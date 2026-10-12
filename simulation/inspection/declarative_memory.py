@@ -1,6 +1,6 @@
 """Retrieval-centred declarative-memory inspection for pyactr models.
 
-pyactr's :class:`DecMemBuffer` searches only its assigned ``dm`` mapping.  This
+pyactr's :class:`DMBuffer` searches only its assigned ``dm`` mapping.  This
 module mirrors that implementation and then applies the retrieval requests that
 actually occur on production right-hand sides.  The runtime diagram therefore
 contains chunks that are both:
@@ -141,17 +141,17 @@ class DeclarativeMemoryInspector:
 
     @classmethod
     def retrieval_bindings(cls, agent: Any) -> list[RetrievalBinding]:
-        """Resolve the concrete ``DecMemBuffer.dm`` bindings used by pyactr."""
+        """Resolve the concrete ``DMBuffer.dm`` bindings used by pyactr."""
         if agent is None:
             return []
         model = getattr(agent, "actr_agent", None)
         if model is None:
             return []
-        decmems = getattr(model, "decmems", {})
-        if not isinstance(decmems, Mapping):
+        dms = getattr(model, "dms", {})
+        if not isinstance(dms, Mapping):
             return []
         memory_by_identity = {
-            id(memory): str(name) for name, memory in decmems.items()
+            id(memory): str(name) for name, memory in dms.items()
         }
 
         candidates: dict[str, Any] = {}
@@ -165,12 +165,12 @@ class DeclarativeMemoryInspector:
                 candidates.setdefault(str(name), buffer)
 
         try:
-            from pyactr.declarative import DecMemBuffer
+            from pyactr.declarative import DMBuffer
         except Exception:  # pragma: no cover
-            DecMemBuffer = ()  # type: ignore[assignment]
+            DMBuffer = ()  # type: ignore[assignment]
 
         only_memory = (
-            next(iter(decmems.values()), None) if len(decmems) == 1 else None
+            next(iter(dms.values()), None) if len(dms) == 1 else None
         )
         result: list[RetrievalBinding] = []
         seen: set[tuple[str, int]] = set()
@@ -178,9 +178,9 @@ class DeclarativeMemoryInspector:
             candidates.items(), key=lambda item: str(item[0]).casefold()
         ):
             is_retrieval = (
-                isinstance(buffer, DecMemBuffer)
-                if DecMemBuffer
-                else type(buffer).__name__ == "DecMemBuffer"
+                isinstance(buffer, DMBuffer)
+                if DMBuffer
+                else type(buffer).__name__ == "DMBuffer"
             )
             if not is_retrieval:
                 continue
@@ -337,7 +337,7 @@ class DeclarativeMemoryInspector:
                 "actor": f"buffer:{binding.buffer_name}",
                 "mode": "retrieval_link",
                 "memory_name": binding.memory_name,
-                "detail": "DecMemBuffer.retrieve iterates this declarative memory",
+                "detail": "DMBuffer.retrieve iterates this declarative memory",
             }
             for binding in bindings
         ]
@@ -518,7 +518,7 @@ class DeclarativeMemoryInspector:
             )
         mapping = value if isinstance(value, Mapping) else {
             "chunk_id": getattr(value, "chunk_id", "chunk"),
-            "memory_name": getattr(value, "memory_name", "decmem"),
+            "memory_name": getattr(value, "memory_name", "dm"),
             "chunk_type": getattr(value, "chunk_type", "chunk"),
             "label": getattr(value, "label", "chunk"),
             "slots": getattr(value, "slots", {}),
@@ -530,7 +530,7 @@ class DeclarativeMemoryInspector:
         }
         return MemoryChunk(
             chunk_id=str(mapping.get("chunk_id", mapping.get("id", "chunk"))),
-            memory_name=str(mapping.get("memory_name", "decmem")),
+            memory_name=str(mapping.get("memory_name", "dm")),
             chunk_type=str(mapping.get("chunk_type", mapping.get("type", "chunk"))),
             label=str(mapping.get("label", mapping.get("chunk_id", "chunk"))),
             slots=dict(mapping.get("slots", {})),

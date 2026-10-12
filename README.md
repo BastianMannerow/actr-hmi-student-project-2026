@@ -11,6 +11,8 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
+The repository bundles a local **pyactr 0.3.2 DM edition**. Its API is `model.dm`, `model.dms`, `model.set_dm(...)`, `DM` and `DMBuffer`. Keep the `pyactr/` directory with the application; provenance and the included GPL license are documented in [`pyactr/LOCAL_CHANGES.md`](pyactr/LOCAL_CHANGES.md).
+
 The application opens maximized and uses the ACT-R icon from `assets/` as its program and taskbar symbol.
 
 ## Main Areas
@@ -37,10 +39,14 @@ Burning bushes are positioned on potentially useful shortcuts. Each bush is rand
 
 ### Terrain Symbols
 
-- `X` — burning tree, always blocked
-- `B` — burning bush, passability initially unknown
-- `F` — fire target
-- circular marker — ACT-R or human-controlled agent
+- `X` — masonry wall, always blocked
+- `B` — animated fire, passability unknown
+- `F` — frightened person awaiting rescue
+- Squirtle sprite — ACT-R agent; an amber ring marks human control
+
+The GUI hides a rescue person permanently for the current run as soon as any agent reaches that cell. This visual history also captures visits between GUI refreshes. Targets remain available to the backend and cognitive model. A new environment starts a fresh visual rescue history.
+
+Terrain is cached. All fire cells share one 20-frame GIF decoder capped at 10 fps; hidden views pause it. The **Animate fire** checkbox freezes the animation for a lower rendering load. Only changed cells are repainted, and sprites are decoded and scaled through bounded caches. Source attribution is in [`assets/environment/CREDITS.md`](assets/environment/CREDITS.md).
 
 The matrix size is defined entirely by the Level Builder and cannot be changed in the GUI.
 
@@ -324,4 +330,13 @@ tests/
 python -m unittest discover -s tests -v
 ```
 
-The tests cover randomized level reachability, the explicit counting chain, Squirtle's initial semantic knowledge graph, dynamic cell-memory upserts, Imaginal architecture, rewards and punishments, actual pyactr conflict resolution under different bravery utilities, complete Agent Analysis reachability, GUI performance safeguards, graph routing, and visual-stimulus separation.
+The included regression tests cover the DM API, retrieval with and without the
+performance boost, visual-model initialization, local assets, GIF playback,
+render-only target removal, skipped display frames, restart, initial overlap,
+hidden views, collision confidentiality and static-cache reuse.
+
+The bundled upstream tests can also be run with:
+
+```bash
+python -m unittest pyactr.tests.tests
+```

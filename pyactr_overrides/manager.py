@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from importlib.metadata import PackageNotFoundError, version
+import pyactr
 from threading import RLock
 from typing import Any
 
@@ -46,10 +46,7 @@ def _restore_all() -> None:
 
 
 def _validate_version() -> None:
-    try:
-        installed = version("pyactr")
-    except PackageNotFoundError as exc:
-        raise RuntimeError("pyactr is not installed.") from exc
+    installed = getattr(pyactr, "__version__", "unknown")
     if installed != _SUPPORTED_PYACTR:
         raise RuntimeError(
             "Experimental pyactr performance boost supports pyactr "

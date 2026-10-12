@@ -768,7 +768,7 @@ def get_declarative_memory(agent_construct: Any):
     DeclarativeMemory
         The declarative memory object (typically an ``ACTRDM`` instance).
     """
-    return agent_construct.actr_agent.decmem
+    return agent_construct.actr_agent.dm
 
 
 def add_to_declarative_memory(agent_construct: Any, chunk: chunks.Chunk) -> None:
@@ -783,7 +783,7 @@ def add_to_declarative_memory(agent_construct: Any, chunk: chunks.Chunk) -> None
         :class:`pyactr.chunks.Chunk` to be stored.
     """
     model = agent_construct.actr_agent
-    model.decmem.add(chunk)
+    model.dm.add(chunk)
     registry = getattr(model, "_explicit_declarative_chunks", None)
     if registry is None:
         registry = set()
@@ -818,7 +818,7 @@ def get_declarative_chunk_type(agent_construct: Any, typename: str):
         All chunks in declarative memory whose ``typename`` matches
         ``typename``.
     """
-    dm = agent_construct.actr_agent.decmem
+    dm = agent_construct.actr_agent.dm
     # In pyactr, the declarative memory is dict-like with chunks as keys.
     return [chunk for chunk in dm.keys() if getattr(chunk, "typename", None) == typename]
 
@@ -839,7 +839,7 @@ def delete_declarative_chunk_type(agent_construct: Any, typename: str) -> int:
     int
         Number of deleted chunks.
     """
-    dm = agent_construct.actr_agent.decmem
+    dm = agent_construct.actr_agent.dm
     to_delete = [chunk for chunk in dm.keys() if getattr(chunk, "typename", None) == typename]
     for chunk in to_delete:
         del dm[chunk]

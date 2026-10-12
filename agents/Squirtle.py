@@ -179,7 +179,7 @@ class Squirtle:
                 affordance_id affordance_traverse
             """
         )
-        model.decmem.add(concept_free_ground)
+        model.dm.add(concept_free_ground)
 
         concept_fire_tree = actr.chunkstring(
             string="""
@@ -193,7 +193,7 @@ class Squirtle:
                 affordance_id affordance_avoid
             """
         )
-        model.decmem.add(concept_fire_tree)
+        model.dm.add(concept_fire_tree)
 
         concept_fire_bush = actr.chunkstring(
             string="""
@@ -207,7 +207,7 @@ class Squirtle:
                 affordance_id affordance_assess
             """
         )
-        model.decmem.add(concept_fire_bush)
+        model.dm.add(concept_fire_bush)
 
         concept_unknown = actr.chunkstring(
             string="""
@@ -221,7 +221,7 @@ class Squirtle:
                 affordance_id affordance_observe
             """
         )
-        model.decmem.add(concept_unknown)
+        model.dm.add(concept_unknown)
 
         concept_target = actr.chunkstring(
             string="""
@@ -235,7 +235,7 @@ class Squirtle:
                 affordance_id affordance_secure
             """
         )
-        model.decmem.add(concept_target)
+        model.dm.add(concept_target)
 
         concept_passable = actr.chunkstring(
             string="""
@@ -249,7 +249,7 @@ class Squirtle:
                 affordance_id affordance_traverse
             """
         )
-        model.decmem.add(concept_passable)
+        model.dm.add(concept_passable)
 
         concept_blocked = actr.chunkstring(
             string="""
@@ -263,7 +263,7 @@ class Squirtle:
                 affordance_id affordance_avoid
             """
         )
-        model.decmem.add(concept_blocked)
+        model.dm.add(concept_blocked)
 
         concept_uncertain = actr.chunkstring(
             string="""
@@ -277,7 +277,7 @@ class Squirtle:
                 affordance_id affordance_test_or_avoid
             """
         )
-        model.decmem.add(concept_uncertain)
+        model.dm.add(concept_uncertain)
 
         brave_policy = actr.chunkstring(
             string=f"""
@@ -290,7 +290,7 @@ class Squirtle:
                 expected_outcome outcome_shortcut
             """
         )
-        model.decmem.add(brave_policy)
+        model.dm.add(brave_policy)
 
         cautious_policy = actr.chunkstring(
             string="""
@@ -303,7 +303,7 @@ class Squirtle:
                 expected_outcome outcome_safe_progress
             """
         )
-        model.decmem.add(cautious_policy)
+        model.dm.add(cautious_policy)
 
         normal_policy = actr.chunkstring(
             string="""
@@ -316,7 +316,7 @@ class Squirtle:
                 expected_outcome outcome_progress
             """
         )
-        model.decmem.add(normal_policy)
+        model.dm.add(normal_policy)
 
         relation_tree_hazard = actr.chunkstring(
             string="""
@@ -329,7 +329,7 @@ class Squirtle:
                 provenance prior_knowledge
             """
         )
-        model.decmem.add(relation_tree_hazard)
+        model.dm.add(relation_tree_hazard)
 
         relation_tree_blocked = actr.chunkstring(
             string="""
@@ -342,7 +342,7 @@ class Squirtle:
                 provenance prior_knowledge
             """
         )
-        model.decmem.add(relation_tree_blocked)
+        model.dm.add(relation_tree_blocked)
 
         relation_bush_danger = actr.chunkstring(
             string="""
@@ -355,7 +355,7 @@ class Squirtle:
                 provenance prior_knowledge
             """
         )
-        model.decmem.add(relation_bush_danger)
+        model.dm.add(relation_bush_danger)
 
         relation_bush_uncertain = actr.chunkstring(
             string="""
@@ -368,7 +368,7 @@ class Squirtle:
                 provenance prior_knowledge
             """
         )
-        model.decmem.add(relation_bush_uncertain)
+        model.dm.add(relation_bush_uncertain)
 
         relation_brave_tests = actr.chunkstring(
             string="""
@@ -381,7 +381,7 @@ class Squirtle:
                 provenance policy_knowledge
             """
         )
-        model.decmem.add(relation_brave_tests)
+        model.dm.add(relation_brave_tests)
 
         relation_caution_avoids = actr.chunkstring(
             string="""
@@ -394,7 +394,7 @@ class Squirtle:
                 provenance policy_knowledge
             """
         )
-        model.decmem.add(relation_caution_avoids)
+        model.dm.add(relation_caution_avoids)
 
         relation_target_motivates = actr.chunkstring(
             string="""
@@ -407,7 +407,7 @@ class Squirtle:
                 provenance mission_knowledge
             """
         )
-        model.decmem.add(relation_target_motivates)
+        model.dm.add(relation_target_motivates)
 
     def _add_control_productions(self, model) -> None:
         self._transition(

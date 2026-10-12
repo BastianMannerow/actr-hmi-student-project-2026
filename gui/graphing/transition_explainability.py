@@ -51,7 +51,7 @@ _MODULE_ALIASES = {
     "g": "Goal",
     "goal": "Goal",
     "retrieval": "Retrieval",
-    "decmem": "Declarative memory",
+    "dm": "Declarative memory",
     "manual": "Manual",
     "visual": "Visual",
     "visual_location": "Visual location",
@@ -66,7 +66,7 @@ def module_name(buffer_name: str) -> str:
         return _MODULE_ALIASES[normalized]
     if "retrieval" in normalized:
         return "Retrieval"
-    if "decmem" in normalized or "declarative" in normalized:
+    if normalized.startswith("dm_") or normalized.endswith("_dm") or "declarative" in normalized:
         return "Declarative memory"
     if "manual" in normalized or "motor" in normalized:
         return "Manual"

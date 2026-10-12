@@ -261,10 +261,10 @@ class AgentSourceAnalyzer:
         "get_buffer": ("*", "read"),
         "set_buffer": ("*", "write"),
         "replace_buffer": ("*", "write"),
-        "get_declarative_memory": ("decmem", "read"),
-        "add_to_declarative_memory": ("decmem", "write"),
-        "delete_declarative_chunk_type": ("decmem", "delete"),
-        "get_declarative_chunk_type": ("decmem", "read"),
+        "get_declarative_memory": ("dm", "read"),
+        "add_to_declarative_memory": ("dm", "write"),
+        "delete_declarative_chunk_type": ("dm", "delete"),
+        "get_declarative_chunk_type": ("dm", "read"),
     }
     _TERMINAL_VALUES = {
         "finished",
@@ -320,7 +320,7 @@ class AgentSourceAnalyzer:
             initial_state = source_initial_state
             productions = source_productions
             declared_buffers = source_buffers
-            memory_names = ["decmem"]
+            memory_names = ["dm"]
             preferred_control_slots = None
         else:
             initial_state = runtime["initial_state"] or source_initial_state
@@ -494,9 +494,9 @@ class AgentSourceAnalyzer:
                 (str(name) for name in buffers.keys()), key=str.lower
             )
             memory_names = sorted(
-                (str(name) for name in getattr(model, "decmems", {}).keys()),
+                (str(name) for name in getattr(model, "dms", {}).keys()),
                 key=str.lower,
-            ) or ["decmem"]
+            ) or ["dm"]
             preferred_control_slots = getattr(
                 construct, "analysis_control_slots", None
             )
@@ -1676,7 +1676,7 @@ class AgentSourceAnalyzer:
     ) -> DeclarativeMemorySnapshot:
         chunks: list[MemoryChunk] = []
         operations: list[dict[str, Any]] = []
-        memories = set(memory_names or ["decmem"])
+        memories = set(memory_names or ["dm"])
 
         for source_name, source, constants, adapter_mode in (
             ("agent", model_source, model_constants, False),
@@ -1731,7 +1731,7 @@ class AgentSourceAnalyzer:
                         "mode": "retrieval_link",
                         "memory_name": memory_name,
                         "detail": (
-                            "pyactr DecMemBuffer.retrieve matches a production "
+                            "pyactr DMBuffer.retrieve matches a production "
                             "request against chunks in this memory"
                         ),
                     }
@@ -1792,13 +1792,13 @@ class AgentSourceAnalyzer:
             func_text = self._node_text(call.func)
             if function_name == "add_to_declarative_memory":
                 argument_index = 1
-                memory_name = "decmem"
+                memory_name = "dm"
             elif function_name == "add" and (
-                "decmem" in func_text or ".dm" in func_text
+                re.search(r"(?:^|\.)dms?(?:\[|\.)", func_text)
             ):
                 argument_index = 0
-                match = re.search(r'decmems?\[[\'"]([^\'"]+)', func_text)
-                memory_name = match.group(1) if match else "decmem"
+                match = re.search(r'dms?\[[\'"]([^\'"]+)', func_text)
+                memory_name = match.group(1) if match else "dm"
             else:
                 continue
             argument_node: ast.AST | None = (

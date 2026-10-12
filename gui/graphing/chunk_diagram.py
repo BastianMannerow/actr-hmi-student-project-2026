@@ -164,7 +164,7 @@ class DeclarativeMemoryDiagramBuilder:
                         dashed=True,
                         weight=1.4,
                         tooltip=(
-                            "pyactr DecMemBuffer.retrieve iterates the chunks in "
+                            "pyactr DMBuffer.retrieve iterates the chunks in "
                             f"{memory_name}."
                         ),
                     )

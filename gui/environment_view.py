@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from gui.environment_canvas import GridCanvas
 from gui.environment_symbols import EnvironmentLegendMarker, EnvironmentSymbol
@@ -35,9 +35,14 @@ class EnvironmentView(QFrame):
         heading.addWidget(title)
         heading.addStretch(1)
         heading.addWidget(self.info_label)
+        self.animation_toggle = QCheckBox("Animate fire")
+        self.animation_toggle.setChecked(True)
+        self.animation_toggle.setToolTip("Disable animation to minimize rendering work.")
+        heading.addWidget(self.animation_toggle)
         layout.addLayout(heading)
 
         self.canvas = GridCanvas(self)
+        self.animation_toggle.toggled.connect(self.canvas.set_animation_enabled)
         layout.addWidget(self.canvas, 1)
         layout.addWidget(self._build_legend())
 
@@ -47,10 +52,10 @@ class EnvironmentView(QFrame):
         row = QHBoxLayout(legend)
         row.setContentsMargins(10, 7, 10, 7)
         row.setSpacing(14)
-        row.addWidget(self._legend_item(EnvironmentSymbol.BURNING_TREE, "Burning tree (blocked)"))
-        row.addWidget(self._legend_item(EnvironmentSymbol.BURNING_BUSH, "Burning bush (unknown)"))
-        row.addWidget(self._legend_item(EnvironmentSymbol.FIRE_TARGET, "Fire target"))
-        row.addWidget(self._legend_item(EnvironmentSymbol.ACTR_AGENT, "ACT-R agent"))
+        row.addWidget(self._legend_item(EnvironmentSymbol.BURNING_TREE, "Wall"))
+        row.addWidget(self._legend_item(EnvironmentSymbol.BURNING_BUSH, "Fire (unknown)"))
+        row.addWidget(self._legend_item(EnvironmentSymbol.FIRE_TARGET, "Rescue person"))
+        row.addWidget(self._legend_item(EnvironmentSymbol.ACTR_AGENT, "Squirtle"))
         row.addWidget(self._legend_item(EnvironmentSymbol.HUMAN_AGENT, "Human agent"))
         row.addStretch(1)
         return legend
@@ -76,18 +81,15 @@ class EnvironmentView(QFrame):
     def refresh(self) -> None:
         matrix = getattr(self.environment, "level_matrix", None)
         if matrix and matrix[0]:
+            indexed_count = getattr(self.environment, "agent_count", None)
             agent_count = int(
-                getattr(
-                    self.environment,
-                    "agent_count",
-                    sum(
+                indexed_count if indexed_count is not None else sum(
                         1
                         for row in matrix
                         for cell in row
                         for obj in cell
                         if getattr(obj, "name", None)
-                    ),
-                )
+                    )
             )
             backend = str(getattr(self.environment, "backend_name", "virtual")).upper()
             level_name = str(getattr(self.environment, "level_name", "")).strip()

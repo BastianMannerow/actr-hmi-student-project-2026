@@ -37,7 +37,10 @@ class Environment:
         self._target_positions_cache: tuple[tuple[int, int], ...] | None = None
         self._render_dirty_cells: set[tuple[int, int]] = set()
         self._render_full_redraw = True
+        # Presentation history only. Targets remain in the world and perception.
+        self._render_reached_targets: set[tuple[int, int]] = set()
         self._rebuild_indices()
+        self._record_render_visits()
         self._update_gui()
 
     def _rebuild_indices(self) -> None:
@@ -87,6 +90,15 @@ class Environment:
         dirty = set(self._render_dirty_cells)
         self._render_dirty_cells.clear()
         return dirty
+
+    def _record_render_visits(self) -> None:
+        self._render_reached_targets.update(
+            set(self._positions.values()).intersection(self.target_positions())
+        )
+
+    def render_reached_targets(self) -> frozenset[tuple[int, int]]:
+        """Retain brief visits even when GUI notifications are coalesced."""
+        return frozenset(self._render_reached_targets)
 
     def find_agent(self, agent: Any) -> Optional[Tuple[int, int]]:
         position = self._positions.get(id(agent))
@@ -140,6 +152,7 @@ class Environment:
         self._render_full_redraw = True
         self._render_dirty_cells.clear()
         self._rebuild_indices()
+        self._record_render_visits()
         self._mark_perception_dirty(None, None, None)
         self._update_gui()
 
@@ -200,6 +213,8 @@ class Environment:
         old_position = (row, column)
         new_position = (next_row, next_column)
         self._positions[id(agent)] = new_position
+        if new_position in self.target_positions():
+            self._render_reached_targets.add(new_position)
         self._render_dirty_cells.update((old_position, new_position))
         name = str(getattr(agent, "name", ""))
         if name:
